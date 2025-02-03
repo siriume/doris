@@ -17,7 +17,20 @@
 
 #include "vec/aggregate_functions/aggregate_function_reader.h"
 
+#include <algorithm>
+#include <string>
+
+#include "vec/aggregate_functions/aggregate_function_bitmap.h"
+#include "vec/aggregate_functions/aggregate_function_hll_union_agg.h"
+#include "vec/aggregate_functions/aggregate_function_min_max.h"
+#include "vec/aggregate_functions/aggregate_function_quantile_state.h"
+#include "vec/aggregate_functions/aggregate_function_reader_first_last.h"
+#include "vec/aggregate_functions/aggregate_function_simple_factory.h"
+#include "vec/aggregate_functions/aggregate_function_sum.h"
+#include "vec/aggregate_functions/helpers.h"
+
 namespace doris::vectorized {
+#include "common/compile_check_begin.h"
 
 // auto spread at nullable condition, null value do not participate aggregate
 void register_aggregate_function_reader_load(AggregateFunctionSimpleFactory& factory) {

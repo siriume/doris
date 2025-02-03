@@ -19,21 +19,28 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <vector>
 
 #include "common/status.h"
 #include "exec/schema_scanner.h"
 #include "olap/rowset/rowset.h"
-#include "olap/rowset/segment_v2/segment.h"
-#include "runtime/runtime_state.h"
+
 namespace doris {
+class RuntimeState;
+
+namespace vectorized {
+class Block;
+} // namespace vectorized
+
 class SchemaRowsetsScanner : public SchemaScanner {
+    ENABLE_FACTORY_CREATOR(SchemaRowsetsScanner);
+
 public:
     SchemaRowsetsScanner();
     ~SchemaRowsetsScanner() override = default;
 
     Status start(RuntimeState* state) override;
-    Status get_next_block(vectorized::Block* block, bool* eos) override;
+    Status get_next_block_internal(vectorized::Block* block, bool* eos) override;
 
 private:
     Status _get_all_rowsets();

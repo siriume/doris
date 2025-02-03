@@ -17,6 +17,15 @@
 
 #include "schema_dummy_scanner.h"
 
+#include <vector>
+
+namespace doris {
+class RuntimeState;
+namespace vectorized {
+class Block;
+} // namespace vectorized
+} // namespace doris
+
 namespace {
 std::vector<doris::SchemaScanner::ColumnDesc> DUMMY_COLUMN;
 }
@@ -31,7 +40,7 @@ Status SchemaDummyScanner::start(RuntimeState* state) {
     return Status::OK();
 }
 
-Status SchemaDummyScanner::get_next_block(vectorized::Block* block, bool* eos) {
+Status SchemaDummyScanner::get_next_block_internal(vectorized::Block* block, bool* eos) {
     *eos = true;
     return Status::OK();
 }

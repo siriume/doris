@@ -36,7 +36,7 @@ suite("aggregate") {
                 c_timestamp_3 datetimev2(6),
                 c_boolean boolean,
                 c_short_decimal decimal(5,2),
-                c_long_decimal decimal(27,9)
+                c_long_decimal decimal(38,10)
             )
             DUPLICATE KEY(c_bigint)
             DISTRIBUTED BY HASH(c_bigint) BUCKETS 1
@@ -61,7 +61,7 @@ suite("aggregate") {
                 c_timestamp_3 datetimev2(6),
                 c_boolean boolean,
                 c_short_decimal decimal(5,2),
-                c_long_decimal decimal(27,9)
+                c_long_decimal decimal(38,11)
             )
             DUPLICATE KEY(c_bigint)
             DISTRIBUTED BY HASH(c_bigint) BUCKETS 1
@@ -104,7 +104,7 @@ suite("aggregate") {
         }
     }
 
-    sql "insert into ${tableName2} values (12, 12.25, 'String1', '1999-01-08', '1999-01-08 02:05:06', '1999-01-08', '1999-01-08 02:05:06.111111', null, '1999-01-08 02:05:06.111111', 'true', null, 12345678901234567890.0123456789);"
+    sql "insert into ${tableName2} values (12, 12.25, 'String1', '1999-01-08', '1999-01-08 02:05:06', '1999-01-08', '1999-01-08 02:05:06.111111', null, '1999-01-08 02:05:06.111111', 'true', null, 123456789012345678.012345678);"
 
     sql " sync "
     qt_aggregate """ select max(upper(c_string)), min(upper(c_string)) from ${tableName} """
@@ -141,6 +141,23 @@ suite("aggregate") {
     qt_aggregate32" select topn_weighted(c_string,c_bigint,3) from ${tableName}"
     qt_aggregate33" select avg_weighted(c_double,c_bigint) from ${tableName};"
     qt_aggregate34" select percentile_array(c_bigint,[0.2,0.5,0.9]) from ${tableName};"
+    
+    try {
+        sql "select percentile_array(c_bigint,[-1,0.5,0.9]) from ${tableName};"
+    } catch (Exception ex) {
+        assert("${ex}".contains("-1"))
+    }
+    try {
+        sql "select percentile_array(c_bigint,[0.5,0.9,3000]) from ${tableName};"
+    } catch (Exception ex) {
+        assert("${ex}".contains("3000"))
+    }
+    try {
+        sql "select percentile_array(c_bigint,[0.5,0.9,null]) from ${tableName};"
+    } catch (Exception ex) {
+        assert("${ex}".contains("null"))
+    }
+
     qt_aggregate """
                 SELECT c_bigint,  
                     CASE
@@ -304,4 +321,8 @@ suite("aggregate") {
     qt_subquery_without_inner_predicate """
         select count(*) from (select t2.c_bigint, t2.c_double, t2.c_string from (select c_bigint, c_double, c_string, c_date,c_timestamp, c_short_decimal from regression_test_query_p0_aggregate.${tableName} where c_bigint > 5000) t2)t1
     """
+
+    qt_aggregate_limit_contain_null """
+    select count(), cast(k12 as int) as t from baseall group by t limit 1;
+	"""
 }

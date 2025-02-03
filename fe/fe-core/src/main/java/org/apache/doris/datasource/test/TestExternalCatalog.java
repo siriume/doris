@@ -18,19 +18,16 @@
 package org.apache.doris.datasource.test;
 
 import org.apache.doris.catalog.Column;
-import org.apache.doris.catalog.Env;
-import org.apache.doris.catalog.external.ExternalDatabase;
-import org.apache.doris.catalog.external.TestExternalDatabase;
 import org.apache.doris.datasource.CatalogProperty;
 import org.apache.doris.datasource.ExternalCatalog;
 import org.apache.doris.datasource.InitCatalogLog;
 import org.apache.doris.datasource.SessionContext;
 
 import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -44,19 +41,20 @@ public class TestExternalCatalog extends ExternalCatalog {
 
     private TestCatalogProvider catalogProvider;
 
-    public TestExternalCatalog(long catalogId, String name, String resource, Map<String, String> props) {
-        super(catalogId, name);
-        this.type = "test";
+    public TestExternalCatalog(long catalogId, String name, String resource, Map<String, String> props,
+            String comment) {
+        super(catalogId, name, InitCatalogLog.Type.TEST, comment);
         this.catalogProperty = new CatalogProperty(resource, props);
+        initCatalogProvider();
+    }
+
+    private void initCatalogProvider() {
+        String providerClass = this.catalogProperty.getProperties().get("catalog_provider.class");
         Class<?> providerClazz = null;
         try {
-            providerClazz = Class.forName(props.get("catalog_provider.class"));
+            providerClazz = Class.forName(providerClass);
             this.catalogProvider = (TestCatalogProvider) providerClazz.newInstance();
-        } catch (ClassNotFoundException e) {
-            throw new RuntimeException(e);
-        } catch (InstantiationException e) {
-            throw new RuntimeException(e);
-        } catch (IllegalAccessException e) {
+        } catch (ClassNotFoundException | InstantiationException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
     }
@@ -65,38 +63,7 @@ public class TestExternalCatalog extends ExternalCatalog {
     protected void initLocalObjectsImpl() {
     }
 
-    @Override
-    protected void init() {
-        Map<String, Long> tmpDbNameToId = Maps.newConcurrentMap();
-        Map<Long, ExternalDatabase> tmpIdToDb = Maps.newConcurrentMap();
-        InitCatalogLog initCatalogLog = new InitCatalogLog();
-        initCatalogLog.setCatalogId(id);
-        initCatalogLog.setType(InitCatalogLog.Type.TEST);
-        List<String> allDatabaseNames = mockedDatabaseNames();
-        for (String dbName : allDatabaseNames) {
-            long dbId;
-            if (dbNameToId != null && dbNameToId.containsKey(dbName)) {
-                dbId = dbNameToId.get(dbName);
-                tmpDbNameToId.put(dbName, dbId);
-                ExternalDatabase db = idToDb.get(dbId);
-                db.setUnInitialized(invalidCacheInInit);
-                tmpIdToDb.put(dbId, db);
-                initCatalogLog.addRefreshDb(dbId);
-            } else {
-                dbId = Env.getCurrentEnv().getNextId();
-                tmpDbNameToId.put(dbName, dbId);
-                TestExternalDatabase db = new TestExternalDatabase(this, dbId, dbName);
-                tmpIdToDb.put(dbId, db);
-                initCatalogLog.addCreateDb(dbId, dbName);
-            }
-        }
-        dbNameToId = tmpDbNameToId;
-        idToDb = tmpIdToDb;
-        Env.getCurrentEnv().getEditLog().logInitCatalog(initCatalogLog);
-    }
-
-    private List<String> mockedDatabaseNames() {
-
+    protected List<String> listDatabaseNames() {
         return Lists.newArrayList(catalogProvider.getMetadata().keySet());
     }
 
@@ -118,22 +85,9 @@ public class TestExternalCatalog extends ExternalCatalog {
     }
 
     @Override
-    public List<String> listDatabaseNames(SessionContext ctx) {
-        makeSureInitialized();
-        return Lists.newArrayList(dbNameToId.keySet());
-    }
-
-    @Override
     public List<String> listTableNames(SessionContext ctx, String dbName) {
         makeSureInitialized();
-        TestExternalDatabase db = (TestExternalDatabase) idToDb.get(dbNameToId.get(dbName));
-        if (db != null && db.isInitialized()) {
-            List<String> names = Lists.newArrayList();
-            db.getTables().stream().forEach(table -> names.add(table.getName()));
-            return names;
-        } else {
-            return mockedTableNames(dbName);
-        }
+        return mockedTableNames(dbName);
     }
 
     @Override
@@ -152,4 +106,11 @@ public class TestExternalCatalog extends ExternalCatalog {
         // db name -> (tbl name -> schema)
         Map<String, Map<String, List<Column>>> getMetadata();
     }
+
+    @Override
+    public void gsonPostProcess() throws IOException {
+        super.gsonPostProcess();
+        initCatalogProvider();
+    }
 }
+

@@ -17,114 +17,42 @@
 
 package org.apache.doris.statistics;
 
+import org.apache.doris.common.io.Text;
+import org.apache.doris.common.io.Writable;
+import org.apache.doris.persist.gson.GsonUtils;
+
+import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.Set;
-import java.util.StringJoiner;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 
-public class AnalysisTaskInfo {
+public class AnalysisTaskInfo implements Writable {
 
     private static final Logger LOG = LogManager.getLogger(AnalysisTaskInfo.class);
 
-
-    public enum AnalysisMethod {
-        SAMPLE,
-        FULL
-    }
-
-    public enum AnalysisType {
-        COLUMN,
-        INDEX,
-        HISTOGRAM
-    }
-
-    public enum JobType {
-        // submit by user directly
-        MANUAL,
-        // submit by system automatically
-        SYSTEM
-    }
-
-    public enum ScheduleType {
-        ONCE,
-        PERIOD
-    }
-
+    @SerializedName("jobId")
     public final long jobId;
 
+    @SerializedName("taskId")
     public final long taskId;
 
-    public final String catalogName;
-
-    public final String dbName;
-
-    public final String tblName;
-
-    public final String colName;
-
-    public final Set<String> partitionNames;
-
-    public final Long indexId;
-
-    public final JobType jobType;
-
-    public final AnalysisMethod analysisMethod;
-
-    public final AnalysisType analysisType;
-
-    // TODO: define constants or get them from configuration properties
-    public final double sampleRate = 0.2;
-    public final int maxBucketNum = 128;
-
-    public String message;
-
-    // finished or failed
-    public int lastExecTimeInMs = 0;
-
-    public AnalysisState state;
-
-    public final ScheduleType scheduleType;
-
-    public AnalysisTaskInfo(long jobId, long taskId, String catalogName, String dbName, String tblName,
-            String colName, Set<String> partitionNames, Long indexId, JobType jobType,
-            AnalysisMethod analysisMethod, AnalysisType analysisType, String message,
-            int lastExecTimeInMs, AnalysisState state, ScheduleType scheduleType) {
+    public AnalysisTaskInfo(long jobId, long taskId) {
         this.jobId = jobId;
         this.taskId = taskId;
-        this.catalogName = catalogName;
-        this.dbName = dbName;
-        this.tblName = tblName;
-        this.colName = colName;
-        this.partitionNames = partitionNames;
-        this.indexId = indexId;
-        this.jobType = jobType;
-        this.analysisMethod = analysisMethod;
-        this.analysisType = analysisType;
-        this.message = message;
-        this.lastExecTimeInMs = lastExecTimeInMs;
-        this.state = state;
-        this.scheduleType = scheduleType;
     }
 
     @Override
-    public String toString() {
-        StringJoiner sj = new StringJoiner("\n", getClass().getName() + ":\n", "\n");
-        sj.add("JobId: " + jobId);
-        sj.add("CatalogName: " + catalogName);
-        sj.add("DBName: " + dbName);
-        sj.add("TableName: " + tblName);
-        sj.add("ColumnName: " + colName);
-        sj.add("PartitionNames: " + partitionNames);
-        sj.add("TaskType: " + analysisType.toString());
-        sj.add("TaskMethod: " + analysisMethod.toString());
-        sj.add("Message: " + message);
-        sj.add("LastExecTime: " + lastExecTimeInMs);
-        sj.add("CurrentState: " + state.toString());
-        return sj.toString();
+    public void write(DataOutput out) throws IOException {
+        String json = GsonUtils.GSON.toJson(this);
+        Text.writeString(out, json);
     }
 
-    public AnalysisState getState() {
-        return state;
+    public static AnalysisTaskInfo read(DataInput dataInput) throws IOException {
+        String json = Text.readString(dataInput);
+        AnalysisTaskInfo analysisTaskInfo = GsonUtils.GSON.fromJson(json, AnalysisTaskInfo.class);
+        return analysisTaskInfo;
     }
 }

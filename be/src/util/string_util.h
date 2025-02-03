@@ -20,7 +20,10 @@
 #include <strings.h>
 
 #include <algorithm>
+#include <boost/token_functions.hpp>
 #include <boost/tokenizer.hpp>
+#include <cctype>
+#include <cstddef>
 #include <map>
 #include <set>
 #include <sstream>
@@ -28,6 +31,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include "common/exception.h"
+#include "common/status.h"
 
 namespace doris {
 
@@ -132,8 +138,12 @@ using StringCaseUnorderedMap =
 
 template <typename T>
 auto get_json_token(T& path_string) {
-    return boost::tokenizer<boost::escaped_list_separator<char>>(
-            path_string, boost::escaped_list_separator<char>("\\", ".", "\""));
+    try {
+        return boost::tokenizer<boost::escaped_list_separator<char>>(
+                path_string, boost::escaped_list_separator<char>("\\", ".", "\""));
+    } catch (const boost::escaped_list_error& err) {
+        throw doris::Exception(ErrorCode::INVALID_JSON_PATH, "meet error {}", err.what());
+    }
 }
 
 #ifdef USE_LIBCPP

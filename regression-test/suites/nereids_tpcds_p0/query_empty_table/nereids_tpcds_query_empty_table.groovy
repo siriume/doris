@@ -32,28 +32,20 @@ suite("nereids_tpcds_query_empty_table") {
 
     def num = 0
 
-    def current_failed_tests = [
-            // Memo.mergeGroup() dead loop
-            "q64.sql",
-            // errCode = 2, detailMessage = Unexpected exception: null
-            "q72.sql",
-            // RpcException, msg: io.grpc.StatusRuntimeException: UNAVAILABLE: Network closed for unknown reason
-            "q77.sql"
-    ].toSet()
-
-    for (final def i in 1..10) {
+    for (final def i in 1..2) {
         logger.info("retry times ${i}".toString())
 
         def success = []
         def failed = []
 
-        def runSqls = sqlFiles.findAll { !current_failed_tests.contains(it.getName()) }
+        def runSqls = sqlFiles
 
         for (final def sqlFile in runSqls) {
             useDb()
             sql "set enable_nereids_planner=true"
             sql "set enable_fallback_to_original_planner=false"
             sql "set query_timeout=60"
+            sql "set enable_nereids_timeout=false"
 
             logger.info("execute ${sqlFile.getName()} [${++num}/${sqlFiles.size()}]".toString())
             try {

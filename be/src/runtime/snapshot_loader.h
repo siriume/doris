@@ -17,19 +17,23 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <gen_cpp/Types_types.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "common/status.h"
-#include "gen_cpp/Types_types.h"
-#include "io/fs/remote_file_system.h"
-#include "olap/tablet.h"
-#include "runtime/client_cache.h"
+#include "olap/tablet_fwd.h"
 
 namespace doris {
+namespace io {
+class RemoteFileSystem;
+} // namespace io
+
+class TRemoteTabletSnapshot;
+class StorageEngine;
 
 struct FileStat {
     std::string name;
@@ -37,7 +41,6 @@ struct FileStat {
     int64_t size;
 };
 class ExecEnv;
-class StorageBackend;
 
 /*
  * Upload:
@@ -61,10 +64,9 @@ class StorageBackend;
  */
 class SnapshotLoader {
 public:
-    SnapshotLoader(ExecEnv* env, int64_t job_id, int64_t task_id);
-    SnapshotLoader(ExecEnv* env, int64_t job_id, int64_t task_id,
-                   const TNetworkAddress& broker_addr,
-                   const std::map<std::string, std::string>& broker_prop);
+    SnapshotLoader(StorageEngine& engine, ExecEnv* env, int64_t job_id, int64_t task_id,
+                   const TNetworkAddress& broker_addr = {},
+                   const std::map<std::string, std::string>& broker_prop = {});
 
     ~SnapshotLoader();
 
@@ -75,6 +77,9 @@ public:
 
     Status download(const std::map<std::string, std::string>& src_to_dest_path,
                     std::vector<int64_t>* downloaded_tablet_ids);
+
+    Status remote_http_download(const std::vector<TRemoteTabletSnapshot>& remote_tablets,
+                                std::vector<int64_t>* downloaded_tablet_ids);
 
     Status move(const std::string& snapshot_path, TabletSharedPtr tablet, bool overwrite);
 
@@ -88,8 +93,6 @@ private:
     Status _get_existing_files_from_local(const std::string& local_path,
                                           std::vector<std::string>* local_files);
 
-    bool _end_with(const std::string& str, const std::string& match);
-
     Status _replace_tablet_id(const std::string& file_name, int64_t tablet_id,
                               std::string* new_file_name);
 
@@ -101,7 +104,8 @@ private:
     Status _list_with_checksum(const std::string& dir, std::map<std::string, FileStat>* md5_files);
 
 private:
-    ExecEnv* _env;
+    StorageEngine& _engine;
+    ExecEnv* _env = nullptr;
     int64_t _job_id;
     int64_t _task_id;
     const TNetworkAddress _broker_addr;

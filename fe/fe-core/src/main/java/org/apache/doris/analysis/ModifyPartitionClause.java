@@ -72,6 +72,23 @@ public class ModifyPartitionClause extends AlterTableClause {
         this.isTempPartition = isTempPartition;
     }
 
+    // for nereids
+    public ModifyPartitionClause(List<String> partitionNames, Map<String, String> properties,
+            boolean isTempPartition, boolean needExpand) {
+        super(AlterOpType.MODIFY_PARTITION);
+        this.partitionNames = partitionNames;
+        this.properties = properties;
+        this.needExpand = needExpand;
+        // ATTN: currently, modify partition only allow 3 kinds of operations:
+        // 1. modify replication num
+        // 2. modify data property
+        // 3. modify in memory
+        // And these 3 operations does not require table to be stable.
+        // If other kinds of operations be added later, "needTableStable" may be changed.
+        this.needTableStable = false;
+        this.isTempPartition = isTempPartition;
+    }
+
     public static ModifyPartitionClause createStarClause(Map<String, String> properties,
                                                          boolean isTempPartition) {
         return new ModifyPartitionClause(properties, isTempPartition);
@@ -105,7 +122,11 @@ public class ModifyPartitionClause extends AlterTableClause {
         PropertyAnalyzer.analyzeReplicaAllocation(properties, "");
 
         // 2. in memory
-        PropertyAnalyzer.analyzeBooleanProp(properties, PropertyAnalyzer.PROPERTIES_INMEMORY, false);
+        boolean isInMemory =
+                    PropertyAnalyzer.analyzeBooleanProp(properties, PropertyAnalyzer.PROPERTIES_INMEMORY, false);
+        if (isInMemory == true) {
+            throw new AnalysisException("Not support set 'in_memory'='true' now!");
+        }
 
         // 3. tablet type
         PropertyAnalyzer.analyzeTabletType(properties);
@@ -125,6 +146,16 @@ public class ModifyPartitionClause extends AlterTableClause {
 
     public boolean isNeedExpand() {
         return this.needExpand;
+    }
+
+    @Override
+    public boolean allowOpMTMV() {
+        return false;
+    }
+
+    @Override
+    public boolean needChangeMTMVState() {
+        return false;
     }
 
     @Override

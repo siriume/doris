@@ -22,7 +22,6 @@ import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.functions.ExplicitlyCastableSignature;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
-import org.apache.doris.nereids.trees.expressions.literal.NullLiteral;
 import org.apache.doris.nereids.trees.expressions.shape.TernaryExpression;
 import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
 import org.apache.doris.nereids.types.BigIntType;
@@ -48,19 +47,11 @@ public class Lag extends WindowFunction implements TernaryExpression, Explicitly
 
     private static final List<FunctionSignature> SIGNATURES;
 
-    public Lag(Expression child) {
-        this(child, Literal.of(1), Literal.of(null));
-    }
-
-    public Lag(Expression child, Expression offset) {
-        this(child, offset, Literal.of(null));
-    }
-
     public Lag(Expression child, Expression offset, Expression defaultValue) {
         super("lag", child, offset, defaultValue);
     }
 
-    public Lag(List<Expression> children) {
+    private Lag(List<Expression> children) {
         super("lag", children);
     }
 
@@ -80,7 +71,7 @@ public class Lag extends WindowFunction implements TernaryExpression, Explicitly
 
     @Override
     public boolean nullable() {
-        if (children.size() == 3 && child(2) instanceof NullLiteral) {
+        if (children.size() == 3 && child(2).nullable()) {
             return true;
         }
         return child(0).nullable();
@@ -98,9 +89,18 @@ public class Lag extends WindowFunction implements TernaryExpression, Explicitly
             return;
         }
         if (children().size() >= 2) {
-            DataType offsetType = getOffset().getDataType();
-            if (!offsetType.isNumericType()) {
-                throw new AnalysisException("The offset of LEAD must be a number:" + this.toSql());
+            checkValidParams(getOffset(), true);
+            if (getOffset() instanceof Literal) {
+                if (((Literal) getOffset()).getDouble() < 0) {
+                    throw new AnalysisException(
+                            "The offset parameter of LAG must be a constant positive integer: " + this.toSql());
+                }
+            } else {
+                throw new AnalysisException(
+                    "The offset parameter of LAG must be a constant positive integer: " + this.toSql());
+            }
+            if (children().size() >= 3) {
+                checkValidParams(getDefaultValue(), false);
             }
         }
     }

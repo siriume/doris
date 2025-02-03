@@ -18,51 +18,46 @@
 package org.apache.doris.datasource.iceberg;
 
 import org.apache.doris.datasource.CatalogProperty;
+import org.apache.doris.datasource.property.PropertyConverter;
+import org.apache.doris.datasource.property.constants.S3Properties;
 
-import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.s3a.Constants;
 import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.aws.glue.GlueCatalog;
-import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.aws.s3.S3FileIOProperties;
 
-import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 public class IcebergGlueExternalCatalog extends IcebergExternalCatalog {
 
-    public IcebergGlueExternalCatalog(long catalogId, String name, String resource, Map<String, String> props) {
-        super(catalogId, name);
+    // As a default placeholder. The path just use for 'create table', query stmt will not use it.
+    private static final String CHECKED_WAREHOUSE = "s3://doris";
+
+    public IcebergGlueExternalCatalog(long catalogId, String name, String resource, Map<String, String> props,
+            String comment) {
+        super(catalogId, name, comment);
+        props = PropertyConverter.convertToMetaProperties(props);
         catalogProperty = new CatalogProperty(resource, props);
     }
 
     @Override
-    protected void initLocalObjectsImpl() {
+    protected void initCatalog() {
         icebergCatalogType = ICEBERG_GLUE;
         GlueCatalog glueCatalog = new GlueCatalog();
-        // AWSGlueAsync glueClient;
-        Configuration conf = setGlueProperties(getConfiguration());
+        Configuration conf = getConfiguration();
+        initS3Param(conf);
         glueCatalog.setConf(conf);
         // initialize glue catalog
-        Map<String, String> catalogProperties = catalogProperty.getProperties();
-        // check AwsProperties.GLUE_CATALOG_ENDPOINT
-        String metastoreUris = catalogProperty.getOrDefault(CatalogProperties.WAREHOUSE_LOCATION, "");
-        if (StringUtils.isEmpty(metastoreUris)) {
-            throw new IllegalArgumentException("Missing glue properties 'warehouse'.");
-        }
-        catalogProperties.put(CatalogProperties.WAREHOUSE_LOCATION, metastoreUris);
-        glueCatalog.initialize(icebergCatalogType, catalogProperties);
+        Map<String, String> catalogProperties = catalogProperty.getHadoopProperties();
+        String warehouse = catalogProperty.getOrDefault(CatalogProperties.WAREHOUSE_LOCATION, CHECKED_WAREHOUSE);
+        catalogProperties.put(CatalogProperties.WAREHOUSE_LOCATION, warehouse);
+        // read from converted s3 endpoint or default by BE s3 endpoint
+        String endpoint = catalogProperties.getOrDefault(Constants.ENDPOINT,
+                catalogProperties.get(S3Properties.Env.ENDPOINT));
+        catalogProperties.putIfAbsent(S3FileIOProperties.ENDPOINT, endpoint);
+
+        glueCatalog.initialize(getName(), catalogProperties);
         catalog = glueCatalog;
-    }
-
-    private Configuration setGlueProperties(Configuration configuration) {
-        return configuration;
-    }
-
-    @Override
-    protected List<String> listDatabaseNames() {
-        return nsCatalog.listNamespaces().stream()
-            .map(Namespace::toString)
-            .collect(Collectors.toList());
     }
 }

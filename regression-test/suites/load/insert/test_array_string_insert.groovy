@@ -48,21 +48,22 @@ suite("test_array_string_insert", "load") {
         sql "set enable_insert_strict = true"
 
         // ARRAY<char> too long
+        def exception_str = isGroupCommitMode() ? "too many filtered rows" : "Insert has filtered data in strict mode"
         test {
             sql "INSERT INTO ${testTable} VALUES (1, ['12345','123456'], [], NULL)"
-            exception "Insert has filtered data in strict mode"
+            exception exception_str
         }
 
         // NULL for NOT NULL column
         test {
             sql "INSERT INTO ${testTable} VALUES (2, ['12345','123'], NULL, NULL)"
-            exception "Insert has filtered data in strict mode"
+            exception exception_str
         }
 
         // ARRAY<ARRAY<char>> too long
         test {
             sql "INSERT INTO ${testTable} VALUES (3, NULL, ['4'], [['123456'],['222']])"
-            exception "Insert has filtered data in strict mode"
+            exception exception_str
         }
 
         // normal insert
@@ -73,6 +74,7 @@ suite("test_array_string_insert", "load") {
 
         // select the table and check whether the data is correct
         qt_select "select * from ${testTable} order by k1"
+        qt_select_count "select count(k2), count(k3), count(k4) from ${testTable}"
     }
     
     test_insert_array_string();

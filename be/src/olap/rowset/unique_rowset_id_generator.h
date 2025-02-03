@@ -20,7 +20,6 @@
 #include <atomic>
 
 #include "olap/rowset/rowset_id_generator.h"
-#include "util/spinlock.h"
 #include "util/uid_util.h"
 
 namespace doris {
@@ -30,27 +29,14 @@ public:
     UniqueRowsetIdGenerator(const UniqueId& backend_uid);
     ~UniqueRowsetIdGenerator() override;
 
-    UniqueRowsetIdGenerator(const UniqueRowsetIdGenerator&) = delete;
-    UniqueRowsetIdGenerator& operator=(const UniqueRowsetIdGenerator&) = delete;
-
     RowsetId next_id() override;
 
-    bool id_in_use(const RowsetId& rowset_id) const override;
-
-    void release_id(const RowsetId& rowset_id) override;
-
 private:
-    mutable SpinLock _lock;
     const UniqueId _backend_uid;
     const int64_t _version = 2; // modify it when create new version id generator
     // A monotonically increasing integer generator,
     // This integer will be part of a rowset id.
     std::atomic<int64_t> _inc_id;
-    // Save the high part of rowset ids generated since last process startup.
-    // Therefore, we cannot strictly rely on _valid_rowset_id_hi
-    // to determine whether the rowset id is being used.
-    // But to use id_in_use() and release_id() to check it.
-    std::unordered_set<int64_t> _valid_rowset_id_hi;
 }; // UniqueRowsetIdGenerator
 
 } // namespace doris

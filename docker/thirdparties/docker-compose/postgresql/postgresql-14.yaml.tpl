@@ -19,14 +19,14 @@ version: "2.1"
 
 services:
   doris--postgres:
-    image: postgres:14.1
+    image: postgis/postgis:14-3.3
     restart: always
     environment:
       POSTGRES_PASSWORD: 123456
     ports:
       - ${DOCKER_PG_14_EXTERNAL_PORT}:5432
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres && psql -U postgres -c 'SELECT 1 FROM doris_test.deadline;'" ]
       interval: 5s
       timeout: 60s
       retries: 120
@@ -35,10 +35,10 @@ services:
       - ./init:/docker-entrypoint-initdb.d
     networks:
       - doris--postgres
-  doris--hello-world:
-    image: hello-world
-    depends_on:
-      doris--postgres:
-        condition: service_healthy 
+
 networks:
   doris--postgres:
+    ipam:
+      driver: default
+      config:
+        - subnet: 168.41.0.0/24

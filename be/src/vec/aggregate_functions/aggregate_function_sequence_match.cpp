@@ -17,16 +17,22 @@
 
 #include "vec/aggregate_functions/aggregate_function_sequence_match.h"
 
+#include <boost/iterator/iterator_facade.hpp>
+
 #include "common/logging.h"
 #include "vec/aggregate_functions/aggregate_function_simple_factory.h"
 #include "vec/aggregate_functions/helpers.h"
+#include "vec/data_types/data_type.h"
+#include "vec/data_types/data_type_nullable.h"
 
 namespace doris::vectorized {
+#include "common/compile_check_begin.h"
 
 template <template <typename, typename> typename AggregateFunction>
 AggregateFunctionPtr create_aggregate_function_sequence_base(const std::string& name,
                                                              const DataTypes& argument_types,
-                                                             const bool result_is_nullable) {
+                                                             const bool result_is_nullable,
+                                                             const AggregateFunctionAttr& attr) {
     const auto arg_count = argument_types.size();
 
     if (arg_count < 4) {

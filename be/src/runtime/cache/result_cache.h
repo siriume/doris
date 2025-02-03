@@ -17,22 +17,20 @@
 
 #pragma once
 
-#include <cassert>
 #include <cstdio>
-#include <cstdlib>
-#include <exception>
-#include <iostream>
-#include <list>
-#include <map>
-#include <mutex>
 #include <shared_mutex>
-#include <thread>
+#include <unordered_map>
 
-#include "common/config.h"
-#include "runtime/cache/cache_utils.h"
+#include "gutil/integral_types.h"
 #include "runtime/cache/result_node.h"
+#include "util/uid_util.h"
 
 namespace doris {
+class PCacheResponse;
+class PClearCacheRequest;
+class PFetchCacheRequest;
+class PFetchCacheResult;
+class PUpdateCacheRequest;
 
 typedef std::unordered_map<UniqueId, ResultNode*> ResultNodeMap;
 
@@ -60,8 +58,8 @@ public:
     size_t get_node_count() const { return _node_count; }
 
 private:
-    ResultNode* _head;
-    ResultNode* _tail;
+    ResultNode* _head = nullptr;
+    ResultNode* _tail = nullptr;
     size_t _node_count;
 };
 

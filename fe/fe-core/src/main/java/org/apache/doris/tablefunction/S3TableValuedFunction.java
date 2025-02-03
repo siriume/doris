@@ -20,15 +20,19 @@ package org.apache.doris.tablefunction;
 import org.apache.doris.analysis.BrokerDesc;
 import org.apache.doris.analysis.StorageBackend.StorageType;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.UserException;
+import org.apache.doris.common.credentials.CloudCredentialWithEndpoint;
 import org.apache.doris.common.util.S3URI;
+import org.apache.doris.datasource.property.PropertyConverter;
+import org.apache.doris.datasource.property.S3ClientBEProperties;
+import org.apache.doris.datasource.property.constants.AzureProperties;
+import org.apache.doris.datasource.property.constants.S3Properties;
+import org.apache.doris.fs.FileSystemFactory;
 import org.apache.doris.thrift.TFileType;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Maps;
-import org.apache.commons.collections.map.CaseInsensitiveMap;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.util.Map;
 
@@ -44,87 +48,117 @@ import java.util.Map;
  * https://bucket.us-east-1.amazonaws.com/csv/taxi.csv with "use_path_style"="false"
  */
 public class S3TableValuedFunction extends ExternalFileTableValuedFunction {
-    private static final Logger LOG = LogManager.getLogger(BrokerDesc.class);
     public static final String NAME = "s3";
-    public static final String S3_URI = "uri";
-    public static final String S3_AK = "AWS_ACCESS_KEY";
-    public static final String S3_SK = "AWS_SECRET_KEY";
-    public static final String S3_ENDPOINT = "AWS_ENDPOINT";
-    public static final String S3_REGION = "AWS_REGION";
-    private static final String AK = "access_key";
-    private static final String SK = "secret_key";
+    public static final String PROP_URI = "uri";
 
-    private static final String USE_PATH_STYLE = "use_path_style";
-    private static final String REGION = "region";
+    private static final ImmutableSet<String> DEPRECATED_KEYS =
+            ImmutableSet.of("access_key", "secret_key", "session_token", "region",
+                    "ACCESS_KEY", "SECRET_KEY", "SESSION_TOKEN", "REGION");
 
-    private static final ImmutableSet<String> PROPERTIES_SET = new ImmutableSet.Builder<String>()
-                        .add(S3_URI)
-                        .add(AK)
-                        .add(SK)
-                        .add(USE_PATH_STYLE)
-                        .add(REGION)
-                        .build();
-    private S3URI s3uri;
-    private String s3AK;
-    private String s3SK;
-    private String endPoint;
-    private String virtualBucket;
-    private boolean forceVirtualHosted;
+    public S3TableValuedFunction(Map<String, String> properties) throws AnalysisException {
+        // 1. analyze common properties
+        Map<String, String> otherProps = super.parseCommonProperties(properties);
 
-    public S3TableValuedFunction(Map<String, String> params) throws AnalysisException {
-        Map<String, String> validParams = new CaseInsensitiveMap();
-        for (String key : params.keySet()) {
-            if (!PROPERTIES_SET.contains(key.toLowerCase()) && !FILE_FORMAT_PROPERTIES.contains(key.toLowerCase())) {
-                throw new AnalysisException(key + " is invalid property");
-            }
-            validParams.put(key, params.get(key));
+        // 2. analyze uri and other properties
+        String uriStr = getOrDefaultAndRemove(otherProps, PROP_URI, null);
+        if (Strings.isNullOrEmpty(uriStr)) {
+            throw new AnalysisException(String.format("Properties '%s' is required.", PROP_URI));
         }
+        forwardCompatibleDeprecatedKeys(otherProps);
 
-        String originUri = validParams.getOrDefault(S3_URI, "");
-        if (originUri.toLowerCase().startsWith("s3")) {
-            // s3 protocol, default virtual-hosted style
-            forceVirtualHosted = true;
-        } else {
-            // not s3 protocol, forceVirtualHosted is determined by USE_PATH_STYLE.
-            forceVirtualHosted = !Boolean.valueOf(validParams.get(USE_PATH_STYLE)).booleanValue();
-        }
+        String usePathStyle = getOrDefaultAndRemove(otherProps, PropertyConverter.USE_PATH_STYLE,
+                PropertyConverter.USE_PATH_STYLE_DEFAULT_VALUE);
+        String forceParsingByStandardUri = getOrDefaultAndRemove(otherProps,
+                PropertyConverter.FORCE_PARSING_BY_STANDARD_URI,
+                PropertyConverter.FORCE_PARSING_BY_STANDARD_URI_DEFAULT_VALUE);
 
-        try {
-            s3uri = S3URI.create(validParams.get(S3_URI), forceVirtualHosted);
-        } catch (UserException e) {
-            throw new AnalysisException("parse s3 uri failed, uri = " + validParams.get(S3_URI), e);
-        }
-        if (forceVirtualHosted) {
-            // s3uri.getVirtualBucket() is: virtualBucket.endpoint, Eg:
-            //          uri: http://my_bucket.cos.ap-beijing.myqcloud.com/file.txt
-            // s3uri.getVirtualBucket() = my_bucket.cos.ap-beijing.myqcloud.com,
-            // so we need separate virtualBucket and endpoint.
-            String[] fileds = s3uri.getVirtualBucket().split("\\.", 2);
-            virtualBucket = fileds[0];
-            if (fileds.length > 1) {
-                endPoint = fileds[1];
+        S3URI s3uri = getS3Uri(uriStr, Boolean.parseBoolean(usePathStyle.toLowerCase()),
+                Boolean.parseBoolean(forceParsingByStandardUri.toLowerCase()));
+
+        // get endpoint first from properties, if not present, get it from s3 uri.
+        // If endpoint is missing, exception will be thrown.
+        String endpoint = constructEndpoint(otherProps, s3uri);
+        if (!otherProps.containsKey(S3Properties.REGION)) {
+            String region;
+            if (AzureProperties.checkAzureProviderPropertyExist(properties)) {
+                // Azure could run without region
+                region = s3uri.getRegion().orElse("DUMMY-REGION");
             } else {
-                throw new AnalysisException("can not parse endpoint, please check uri.");
+                region = s3uri.getRegion().orElseThrow(() -> new AnalysisException(
+                        String.format("Properties '%s' is required.", S3Properties.REGION)));
+            }
+            otherProps.put(S3Properties.REGION, region);
+        }
+        checkNecessaryS3Properties(otherProps);
+        CloudCredentialWithEndpoint credential = new CloudCredentialWithEndpoint(endpoint,
+                getOrDefaultAndRemove(otherProps, S3Properties.REGION, ""),
+                getOrDefaultAndRemove(otherProps, S3Properties.ACCESS_KEY, ""),
+                getOrDefaultAndRemove(otherProps, S3Properties.SECRET_KEY, ""));
+        if (otherProps.containsKey(S3Properties.SESSION_TOKEN)) {
+            credential.setSessionToken(getOrDefaultAndRemove(otherProps, S3Properties.SESSION_TOKEN, ""));
+        }
+
+        locationProperties = S3Properties.credentialToMap(credential);
+        locationProperties.put(PropertyConverter.USE_PATH_STYLE, usePathStyle);
+        if (AzureProperties.checkAzureProviderPropertyExist(properties)) {
+            // For Azure's compatibility, we need bucket to connect to the blob storage's container
+            locationProperties.put(S3Properties.BUCKET, s3uri.getBucket());
+        }
+        locationProperties.putAll(S3ClientBEProperties.getBeFSProperties(locationProperties));
+        locationProperties.putAll(otherProps);
+
+        filePath = NAME + S3URI.SCHEME_DELIM + s3uri.getBucket() + S3URI.PATH_DELIM + s3uri.getKey();
+
+        if (FeConstants.runningUnitTest) {
+            // Just check
+            FileSystemFactory.getS3FileSystem(locationProperties);
+        } else {
+            parseFile();
+        }
+    }
+
+    private String constructEndpoint(Map<String, String> properties, S3URI s3uri) throws AnalysisException {
+        String endpoint;
+        if (!AzureProperties.checkAzureProviderPropertyExist(properties)) {
+            // get endpoint first from properties, if not present, get it from s3 uri.
+            // If endpoint is missing, exception will be thrown.
+            endpoint = getOrDefaultAndRemove(properties, S3Properties.ENDPOINT, s3uri.getEndpoint().orElse(""));
+            if (Strings.isNullOrEmpty(endpoint)) {
+                throw new AnalysisException(String.format("Properties '%s' is required.", S3Properties.ENDPOINT));
             }
         } else {
-            endPoint = s3uri.getBucketScheme();
+            String bucket = s3uri.getBucket();
+            String accountName = properties.getOrDefault(S3Properties.ACCESS_KEY, "");
+            if (accountName.isEmpty()) {
+                throw new AnalysisException(String.format("Properties '%s' is required.", S3Properties.ACCESS_KEY));
+            }
+            endpoint = String.format(AzureProperties.AZURE_ENDPOINT_TEMPLATE, accountName, bucket);
         }
-        s3AK = validParams.getOrDefault(AK, "");
-        s3SK = validParams.getOrDefault(SK, "");
-        String usePathStyle = validParams.getOrDefault(USE_PATH_STYLE, "false");
+        return endpoint;
+    }
 
-        parseProperties(validParams);
+    private void forwardCompatibleDeprecatedKeys(Map<String, String> props) {
+        for (String deprecatedKey : DEPRECATED_KEYS) {
+            String value = props.remove(deprecatedKey);
+            if (!Strings.isNullOrEmpty(value)) {
+                props.put("s3." + deprecatedKey.toLowerCase(), value);
+            }
+        }
+    }
 
-        // set S3 location properties
-        // these five properties is necessary, no one can be lost.
-        locationProperties = Maps.newHashMap();
-        locationProperties.put(S3_ENDPOINT, endPoint);
-        locationProperties.put(S3_AK, s3AK);
-        locationProperties.put(S3_SK, s3SK);
-        locationProperties.put(S3_REGION, validParams.getOrDefault(REGION, ""));
-        locationProperties.put(USE_PATH_STYLE, usePathStyle);
+    private void checkNecessaryS3Properties(Map<String, String> props) throws AnalysisException {
+        if (Strings.isNullOrEmpty(props.get(S3Properties.REGION))) {
+            throw new AnalysisException(String.format("Properties '%s' is required.", S3Properties.REGION));
+        }
+        // do not check ak and sk, because we can read them from system environment.
+    }
 
-        parseFile();
+    private S3URI getS3Uri(String uri, boolean isPathStyle, boolean forceParsingStandardUri) throws AnalysisException {
+        try {
+            return S3URI.create(uri, isPathStyle, forceParsingStandardUri);
+        } catch (UserException e) {
+            throw new AnalysisException("parse s3 uri failed, uri = " + uri, e);
+        }
     }
 
     // =========== implement abstract methods of ExternalFileTableValuedFunction =================
@@ -136,11 +170,7 @@ public class S3TableValuedFunction extends ExternalFileTableValuedFunction {
     @Override
     public String getFilePath() {
         // must be "s3://..."
-        if (forceVirtualHosted) {
-            return NAME + S3URI.SCHEME_DELIM + virtualBucket + S3URI.PATH_DELIM
-                    + s3uri.getBucket() + S3URI.PATH_DELIM + s3uri.getKey();
-        }
-        return NAME + S3URI.SCHEME_DELIM + s3uri.getKey();
+        return filePath;
     }
 
     @Override
@@ -154,3 +184,4 @@ public class S3TableValuedFunction extends ExternalFileTableValuedFunction {
         return "S3TableValuedFunction";
     }
 }
+

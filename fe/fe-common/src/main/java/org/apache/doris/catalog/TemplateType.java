@@ -81,7 +81,7 @@ public class TemplateType extends Type {
 
     @Override
     public Type specializeTemplateType(Type specificType, Map<String, Type> specializedTypeMap,
-                                       boolean useSpecializedType) throws TypeException {
+                                       boolean useSpecializedType, boolean enableDecimal256) throws TypeException {
         if (specificType.hasTemplateType() && !specificType.isNull()) {
             throw new TypeException(specificType + " should not hasTemplateType");
         }
@@ -95,16 +95,17 @@ public class TemplateType extends Type {
         }
 
         if (specializedType != null
+                && !specializedType.isNull()
                 && !specificType.equals(specializedType)
                 && !specificType.matchesType(specializedType)
-                && !Type.isImplicitlyCastable(specificType, specializedType, true)
+                && !Type.isImplicitlyCastable(specificType, specializedType, true, enableDecimal256)
                 && !Type.canCastTo(specificType, specializedType)) {
             throw new TypeException(
                 String.format("can not specialize template type %s to %s since it's already specialized as %s",
                     name, specificType, specializedType));
         }
 
-        if (specializedType == null) {
+        if (specializedType == null || specializedType.isNull()) {
             specializedTypeMap.put(name, specificType);
         }
         return specializedTypeMap.get(name);
@@ -117,8 +118,8 @@ public class TemplateType extends Type {
         expandSizeMap.computeIfAbsent(name, k -> args.length);
         if (expandSizeMap.get(name) != args.length) {
             throw new TypeException(
-                    String.format("can not expand variadic template type %s to %s size since it's "
-                            + "already expand as %s size", name, args.length, expandSizeMap.get(name)));
+                String.format("can not expand variadic template type %s to %s size since it's "
+                    + "already expand as %s size", name, args.length, expandSizeMap.get(name)));
         }
     }
 

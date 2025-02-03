@@ -17,40 +17,15 @@
 
 #pragma once
 
-#include <type_traits>
+#include <stdint.h>
 
-#include "runtime/primitive_type.h"
-
-namespace doris {
-class FunctionContext;
-} // namespace doris
+#include <functional>
+#include <utility>
 
 namespace doris {
-
-using doris::FunctionContext;
 
 using MemFootprint = std::pair<int64_t, uint8_t*>;
 using GenMemFootprintFunc = std::function<MemFootprint(int64_t size)>;
-
-struct ArrayIteratorFunctionsBase;
-class ArrayIterator;
-class Status;
-class ObjectPool;
-
-template <PrimitiveType type>
-struct ArrayIteratorFunctions;
-template <typename T>
-inline constexpr std::enable_if_t<std::is_base_of_v<ArrayIteratorFunctionsBase, T>, bool>
-        IsTypeFixedWidth = true;
-
-template <>
-inline constexpr bool IsTypeFixedWidth<ArrayIteratorFunctions<TYPE_CHAR>> = false;
-template <>
-inline constexpr bool IsTypeFixedWidth<ArrayIteratorFunctions<TYPE_VARCHAR>> = false;
-template <>
-inline constexpr bool IsTypeFixedWidth<ArrayIteratorFunctions<TYPE_STRING>> = false;
-template <>
-inline constexpr bool IsTypeFixedWidth<ArrayIteratorFunctions<TYPE_ARRAY>> = false;
 
 /**
  * The format of array-typed slot.
@@ -94,12 +69,12 @@ public:
 
 private:
     // child column data
-    void* _data;
+    void* _data = nullptr;
     uint64_t _length;
     // item has no null value if has_null is false.
     // item ```may``` has null value if has_null is true.
     bool _has_null;
     // null bitmap
-    bool* _null_signs;
+    bool* _null_signs = nullptr;
 };
 } // namespace doris

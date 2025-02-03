@@ -20,36 +20,24 @@
 
 #pragma once
 
+// IWYU pragma: no_include <crc32intrin.h>
+#include <glog/logging.h>
+
+#include <algorithm>
 #include <climits>
-#include <functional>
+#include <cstdint>
+#include <cstring>
 #include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "gutil/hash/city.h"
-#include "gutil/hash/hash128to64.h"
-#include "util/cpu_info.h"
 #include "util/hash_util.hpp"
 #include "util/slice.h"
-#include "vec/common/string_ref.h"
+#include "util/sse_util.hpp"
 #include "vec/common/unaligned.h"
 #include "vec/core/types.h"
-
-#if defined(__SSE2__)
-#include <emmintrin.h>
-#endif
-
-#if defined(__SSE4_2__)
-#include <nmmintrin.h>
-#include <smmintrin.h>
-
-#include "util/sse_util.hpp"
-#endif
-
-#if defined(__aarch64__)
-#include <sse2neon.h>
-#endif
 
 namespace doris {
 
@@ -159,9 +147,10 @@ inline bool memequalSSE2Wide(const char* p1, const char* p2, size_t size) {
 //   - s1/n1: ptr/len for the first string
 //   - s2/n2: ptr/len for the second string
 //   - len: min(n1, n2) - this can be more cheaply passed in by the caller
-inline int string_compare(const char* s1, int64_t n1, const char* s2, int64_t n2, int64_t len) {
+PURE inline int string_compare(const char* s1, int64_t n1, const char* s2, int64_t n2,
+                               int64_t len) {
     DCHECK_EQ(len, std::min(n1, n2));
-#ifdef __SSE4_2__
+#if defined(__SSE4_2__) || defined(__aarch64__)
     while (len >= sse_util::CHARS_PER_128_BIT_REGISTER) {
         __m128i xmm0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(s1));
         __m128i xmm1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(s2));
@@ -181,9 +170,6 @@ inline int string_compare(const char* s1, int64_t n1, const char* s2, int64_t n2
         u2 = (unsigned char)*s2++;
         if (u1 != u2) {
             return u1 - u2;
-        }
-        if (u1 == '\0') {
-            return n1 - n2;
         }
     }
 
@@ -205,13 +191,14 @@ struct StringRef {
     StringRef(const unsigned char* data_, size_t size_)
             : StringRef(reinterpret_cast<const char*>(data_), size_) {}
 
-    StringRef(const std::string& s) : data(s.data()), size(s.size()) {}
+    /// Make this copy constructor explicit to prevent inadvertently constructing a StringRef from a temporary std::string variable.
+    explicit StringRef(const std::string& s) : data(s.data()), size(s.size()) {}
     explicit StringRef(const char* str) : data(str), size(strlen(str)) {}
 
     std::string to_string() const { return std::string(data, size); }
     std::string debug_string() const { return to_string(); }
-    std::string_view to_string_view() const { return std::string_view(data, size); }
-    Slice to_slice() const { return doris::Slice(data, size); }
+    std::string_view to_string_view() const { return {data, size}; }
+    Slice to_slice() const { return {data, size}; }
 
     // this is just for show, e.g. print data to error log, to avoid print large string.
     std::string to_prefix(size_t length) const { return std::string(data, std::min(length, size)); }
@@ -220,10 +207,16 @@ struct StringRef {
     operator std::string_view() const { return std::string_view {data, size}; }
 
     StringRef substring(int start_pos, int new_len) const {
-        return StringRef(data + start_pos, (new_len < 0) ? (size - start_pos) : new_len);
+        return {data + start_pos, (new_len < 0) ? (size - start_pos) : new_len};
     }
 
     StringRef substring(int start_pos) const { return substring(start_pos, size - start_pos); }
+
+    const char* begin() const { return data; }
+    const char* end() const { return data + size; }
+    // there's no border check in functions below. That's same with STL.
+    char front() const { return *data; }
+    char back() const { return *(data + size - 1); }
 
     // Trims leading and trailing spaces.
     StringRef trim() const;
@@ -237,6 +230,8 @@ struct StringRef {
     static StringRef min_string_val();
     static StringRef max_string_val();
 
+    bool start_with(char) const;
+    bool end_with(char) const;
     bool start_with(const StringRef& search_string) const;
     bool end_with(const StringRef& search_string) const;
 
@@ -258,7 +253,9 @@ struct StringRef {
             }
         }
 
-        return string_compare(this->data, this->size, other.data, other.size, l);
+        // string_compare doesn't have sign result
+        int cmp_result = string_compare(this->data, this->size, other.data, other.size, l);
+        return (cmp_result > 0) - (cmp_result < 0);
     }
 
     void replace(const char* ptr, int len) {
@@ -271,13 +268,7 @@ struct StringRef {
 
     // ==
     bool eq(const StringRef& other) const {
-        if (this->size != other.size) {
-            return false;
-        }
-#if defined(__SSE2__)
-        return memequalSSE2Wide(this->data, other.data, this->size);
-#endif
-        return string_compare(this->data, this->size, other.data, other.size, this->size) == 0;
+        return (size == other.size) && (memcmp(data, other.data, size) == 0);
     }
 
     bool operator==(const StringRef& other) const { return eq(other); }
@@ -314,25 +305,13 @@ inline std::size_t hash_value(const StringRef& v) {
 
 using StringRefs = std::vector<StringRef>;
 
-/** Hash functions.
-  * You can use either CityHash64,
-  *  or a function based on the crc32 statement,
-  *  which is obviously less qualitative, but on real data sets,
-  *  when used in a hash table, works much faster.
-  * For more information, see hash_map_string_3.cpp
-  */
-
-struct StringRefHash64 {
-    size_t operator()(StringRef x) const { return util_hash::CityHash64(x.data, x.size); }
-};
-
 #if defined(__SSE4_2__) || defined(__aarch64__)
 
 /// Parts are taken from CityHash.
 
 inline doris::vectorized::UInt64 hash_len16(doris::vectorized::UInt64 u,
                                             doris::vectorized::UInt64 v) {
-    return Hash128to64(uint128(u, v));
+    return util_hash::HashLen16(u, v);
 }
 
 inline doris::vectorized::UInt64 shift_mix(doris::vectorized::UInt64 val) {
@@ -364,45 +343,38 @@ inline size_t hash_less_than8(const char* data, size_t size) {
     return k2;
 }
 
-inline size_t hash_less_than16(const char* data, size_t size) {
-    if (size > 8) {
-        doris::vectorized::UInt64 a = unaligned_load<doris::vectorized::UInt64>(data);
-        doris::vectorized::UInt64 b = unaligned_load<doris::vectorized::UInt64>(data + size - 8);
-        return hash_len16(a, rotate_by_at_least1(b + size, size)) ^ b;
+inline size_t crc32_hash(const char* pos, size_t size) {
+    if (size == 0) {
+        return 0;
     }
 
-    return hash_less_than8(data, size);
+    if (size < 8) {
+        return hash_less_than8(pos, size);
+    }
+
+    const char* end = pos + size;
+    size_t res = -1ULL;
+
+    do {
+        auto word = unaligned_load<doris::vectorized::UInt64>(pos);
+        res = _mm_crc32_u64(res, word);
+
+        pos += 8;
+    } while (pos + 8 < end);
+
+    auto word =
+            unaligned_load<doris::vectorized::UInt64>(end - 8); /// I'm not sure if this is normal.
+    res = _mm_crc32_u64(res, word);
+
+    return res;
+}
+
+inline size_t crc32_hash(const std::string str) {
+    return crc32_hash(str.data(), str.size());
 }
 
 struct CRC32Hash {
-    size_t operator()(const StringRef& x) const {
-        const char* pos = x.data;
-        size_t size = x.size;
-
-        if (size == 0) {
-            return 0;
-        }
-
-        if (size < 8) {
-            return hash_less_than8(x.data, x.size);
-        }
-
-        const char* end = pos + size;
-        size_t res = -1ULL;
-
-        do {
-            doris::vectorized::UInt64 word = unaligned_load<doris::vectorized::UInt64>(pos);
-            res = _mm_crc32_u64(res, word);
-
-            pos += 8;
-        } while (pos + 8 < end);
-
-        doris::vectorized::UInt64 word = unaligned_load<doris::vectorized::UInt64>(
-                end - 8); /// I'm not sure if this is normal.
-        res = _mm_crc32_u64(res, word);
-
-        return res;
-    }
+    size_t operator()(const StringRef& x) const { return crc32_hash(x.data, x.size); }
 };
 
 struct StringRefHash : CRC32Hash {};

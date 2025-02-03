@@ -48,6 +48,8 @@ public:
         // encode
         PageBuilderOptions options;
         BinaryPrefixPageBuilder page_builder(options);
+        Status ret0 = page_builder.init();
+        EXPECT_TRUE(ret0.ok());
 
         size_t count = slices.size();
         const Slice* ptr = &slices[0];
@@ -75,7 +77,7 @@ public:
 
         //check values
         vectorized::Arena pool;
-        auto type_info = get_scalar_type_info(OLAP_FIELD_TYPE_VARCHAR);
+        auto type_info = get_scalar_type_info(FieldType::OLAP_FIELD_TYPE_VARCHAR);
         size_t size = slices.size();
         std::unique_ptr<ColumnVectorBatch> cvb;
         ColumnVectorBatch::create(size, false, type_info, nullptr, &cvb);
@@ -96,7 +98,7 @@ public:
         while (true) {
             //check values
             vectorized::Arena pool;
-            auto type_info = get_scalar_type_info(OLAP_FIELD_TYPE_VARCHAR);
+            auto type_info = get_scalar_type_info(FieldType::OLAP_FIELD_TYPE_VARCHAR);
             std::unique_ptr<ColumnVectorBatch> cvb;
             size_t size = 6;
             ColumnVectorBatch::create(size, false, type_info, nullptr, &cvb);
@@ -132,7 +134,7 @@ public:
         Slice v1 = Slice("1039");
         bool exact_match;
         ret = page_decoder->seek_at_or_after_value(&v1, &exact_match);
-        EXPECT_TRUE(ret.is<NOT_FOUND>());
+        EXPECT_TRUE(ret.is<ENTRY_NOT_FOUND>());
 
         Slice v2 = Slice("1000");
         ret = page_decoder->seek_at_or_after_value(&v2, &exact_match);
@@ -162,6 +164,8 @@ public:
         // encode
         PageBuilderOptions options;
         BinaryPrefixPageBuilder page_builder(options);
+        Status ret0 = page_builder.init();
+        EXPECT_TRUE(ret0.ok());
 
         size_t count = slices.size();
         const Slice* ptr = &slices[0];
@@ -186,7 +190,7 @@ public:
         EXPECT_TRUE(ret.ok());
         // because every slice is unique
         EXPECT_EQ(slices.size(), page_decoder->count());
-        auto type_info = get_scalar_type_info(OLAP_FIELD_TYPE_VARCHAR);
+        auto type_info = get_scalar_type_info(FieldType::OLAP_FIELD_TYPE_VARCHAR);
         size_t size = slices.size();
 
         {
@@ -243,7 +247,7 @@ public:
         Slice v1 = Slice("1039");
         bool exact_match;
         ret = page_decoder->seek_at_or_after_value(&v1, &exact_match);
-        EXPECT_TRUE(ret.is<NOT_FOUND>());
+        EXPECT_TRUE(ret.is<ENTRY_NOT_FOUND>());
 
         Slice v2 = Slice("1000");
         ret = page_decoder->seek_at_or_after_value(&v2, &exact_match);
@@ -273,6 +277,8 @@ public:
         // encode
         PageBuilderOptions options;
         BinaryPrefixPageBuilder page_builder(options);
+        Status ret0 = page_builder.init();
+        EXPECT_TRUE(ret0.ok());
 
         size_t count = slices.size();
         const Slice* ptr = &slices[0];

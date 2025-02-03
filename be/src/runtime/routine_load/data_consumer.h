@@ -17,19 +17,27 @@
 
 #pragma once
 
-#include <ctime>
-#include <mutex>
-#include <unordered_map>
+#include <stdint.h>
 
+#include <ctime>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <ostream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "common/logging.h"
+#include "common/status.h"
 #include "librdkafka/rdkafkacpp.h"
 #include "runtime/stream_load/stream_load_context.h"
-#include "util/blocking_queue.hpp"
 #include "util/uid_util.h"
 
 namespace doris {
 
-class KafkaConsumerPipe;
-class Status;
+template <typename T>
+class BlockingQueue;
 
 class DataConsumer {
 public:
@@ -77,6 +85,7 @@ protected:
 };
 
 class PIntegerPair;
+
 class KafkaEventCb : public RdKafka::EventCb {
 public:
     void event_cb(RdKafka::Event& event) {
@@ -142,15 +151,19 @@ public:
     Status get_partition_meta(std::vector<int32_t>* partition_ids);
     // get offsets for times
     Status get_offsets_for_times(const std::vector<PIntegerPair>& times,
-                                 std::vector<PIntegerPair>* offsets);
+                                 std::vector<PIntegerPair>* offsets, int timeout);
     // get latest offsets for partitions
     Status get_latest_offsets_for_partitions(const std::vector<int32_t>& partition_ids,
-                                             std::vector<PIntegerPair>* offsets);
+                                             std::vector<PIntegerPair>* offsets, int timeout);
+    // get offsets for times
+    Status get_real_offsets_for_partitions(const std::vector<PIntegerPair>& offset_flags,
+                                           std::vector<PIntegerPair>* offsets, int timeout);
 
 private:
     std::string _brokers;
     std::string _topic;
     std::unordered_map<std::string, std::string> _custom_properties;
+    std::set<int32_t> _consuming_partition_ids;
 
     KafkaEventCb _k_event_cb;
     RdKafka::KafkaConsumer* _k_consumer = nullptr;

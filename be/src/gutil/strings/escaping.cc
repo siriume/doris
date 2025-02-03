@@ -6,10 +6,15 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-
+#include <glog/logging.h>
 #include <limits>
+#include <ostream>
+
+#include "common/exception.h"
+
 using std::numeric_limits;
 #include <vector>
+
 using std::vector;
 
 #include "gutil/charmap.h"
@@ -17,8 +22,8 @@ using std::vector;
 #include "gutil/integral_types.h"
 #include "gutil/port.h"
 #include "gutil/stl_util.h"
-#include "gutil/strings/join.h"
 #include "gutil/utf/utf.h" // for runetochar
+#include "gutil/strings/strcat.h"
 
 namespace strings {
 
@@ -1081,7 +1086,8 @@ int Base64UnescapeInternal(const char* src, int szsrc, char* dest, int szdest,
 
     default:
         // state should have no other values at this point.
-        LOG(FATAL) << "This can't happen; base64 decoder state = " << state;
+        throw doris::Exception(
+                doris::Status::FatalError("This can't happen; base64 decoder state = {}", state));
     }
 
     // The remainder of the string should be all whitespace, mixed with

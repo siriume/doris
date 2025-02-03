@@ -17,6 +17,8 @@
 
 package org.apache.doris.catalog;
 
+import org.apache.doris.analysis.Analyzer;
+import org.apache.doris.analysis.CastExpr;
 import org.apache.doris.analysis.CreateMaterializedViewStmt;
 import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.SlotRef;
@@ -33,6 +35,7 @@ import org.apache.doris.thrift.TStorageType;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -47,33 +50,47 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
-    @SerializedName(value = "indexId")
+    @SerializedName(value = "id", alternate = {"indexId"})
     private long indexId;
-    @SerializedName(value = "schema")
+    @SerializedName(value = "sc", alternate = {"schema"})
     private List<Column> schema = Lists.newArrayList();
-    @SerializedName(value = "schemaVersion")
+    @SerializedName(value = "sv", alternate = {"schemaVersion"})
     private int schemaVersion;
-    @SerializedName(value = "schemaHash")
+    @SerializedName(value = "sh", alternate = {"schemaHash"})
     private int schemaHash;
-    @SerializedName(value = "shortKeyColumnCount")
+    @SerializedName(value = "skcc", alternate = {"shortKeyColumnCount"})
     private short shortKeyColumnCount;
-    @SerializedName(value = "storageType")
+    @SerializedName(value = "st", alternate = {"storageType"})
     private TStorageType storageType;
-    @SerializedName(value = "keysType")
+    @SerializedName(value = "kt", alternate = {"keysType"})
     private KeysType keysType;
-    @SerializedName(value = "defineStmt")
+    @SerializedName(value = "dst", alternate = {"defineStmt"})
     private OriginStatement defineStmt;
     //for light schema change
-    @SerializedName(value = "maxColUniqueId")
+    @SerializedName(value = "mcui", alternate = {"maxColUniqueId"})
     private int maxColUniqueId = Column.COLUMN_UNIQUE_ID_INIT_VALUE;
+    @SerializedName(value = "idx", alternate = {"indexes"})
+    private List<Index> indexes;
 
     private Expr whereClause;
+    private Map<String, Column> nameToColumn;
+    private Map<String, Column> definedNameToColumn;
+
+    @SerializedName(value = "dbName")
+    private String dbName;
 
     private static final Logger LOG = LogManager.getLogger(MaterializedIndexMeta.class);
 
 
     public MaterializedIndexMeta(long indexId, List<Column> schema, int schemaVersion, int schemaHash,
             short shortKeyColumnCount, TStorageType storageType, KeysType keysType, OriginStatement defineStmt) {
+        this(indexId, schema, schemaVersion, schemaHash, shortKeyColumnCount, storageType, keysType,
+                defineStmt, null, null); // indexes is null by default
+    }
+
+    public MaterializedIndexMeta(long indexId, List<Column> schema, int schemaVersion, int schemaHash,
+            short shortKeyColumnCount, TStorageType storageType, KeysType keysType, OriginStatement defineStmt,
+            List<Index> indexes, String dbName) {
         this.indexId = indexId;
         Preconditions.checkState(schema != null);
         Preconditions.checkState(schema.size() != 0);
@@ -86,10 +103,16 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
         Preconditions.checkState(keysType != null);
         this.keysType = keysType;
         this.defineStmt = defineStmt;
+        this.indexes = indexes != null ? indexes : Lists.newArrayList();
+        initColumnNameMap();
+        this.dbName = dbName;
     }
 
     public void setWhereClause(Expr whereClause) {
         this.whereClause = whereClause;
+        if (this.whereClause != null) {
+            this.whereClause.setDisableTableName(true);
+        }
     }
 
     public Expr getWhereClause() {
@@ -98,6 +121,17 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
 
     public long getIndexId() {
         return indexId;
+    }
+
+    public void resetIndexIdForRestore(long id, String srcDbName, String dbName) {
+        indexId = id;
+
+        // the source db name is not setted in old BackupMeta, keep compatible with the old one.
+        // See InitMaterializationContextHook.java:createSyncMvContexts for details.
+        if (defineStmt != null && srcDbName != null) {
+            String newStmt = defineStmt.originStmt.replaceAll(srcDbName, dbName);
+            defineStmt = new OriginStatement(newStmt, defineStmt.idx);
+        }
     }
 
     public KeysType getKeysType() {
@@ -112,6 +146,14 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
         return storageType;
     }
 
+    public List<Index> getIndexes() {
+        return indexes != null ? indexes : Lists.newArrayList();
+    }
+
+    public void setIndexes(List<Index> newIndexes) {
+        this.indexes = newIndexes;
+    }
+
     public List<Column> getSchema() {
         return getSchema(true);
     }
@@ -124,8 +166,22 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
         }
     }
 
-    public void setSchema(List<Column> newSchema) {
+    public void setSchema(List<Column> newSchema) throws IOException {
         this.schema = newSchema;
+        parseStmt(null);
+        initColumnNameMap();
+    }
+
+    public List<Column> getPrefixKeyColumns() {
+        List<Column> keys = Lists.newArrayList();
+        for (Column col : schema) {
+            if (col.isKey()) {
+                keys.add(col);
+            } else {
+                break;
+            }
+        }
+        return keys;
     }
 
     public void setSchemaHash(int newSchemaHash) {
@@ -159,6 +215,24 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
                 }
             }
 
+            boolean isCastSlot =
+                    entry.getValue() instanceof CastExpr && entry.getValue().getChild(0) instanceof SlotRef;
+
+            // Compatibility code for older versions of mv
+            // old version:
+            // goods_number -> mva_SUM__CAST(`goods_number` AS BIGINT)
+            // new version:
+            // goods_number -> mva_SUM__CAST(`goods_number` AS bigint)
+            if (isCastSlot && !match) {
+                for (Column column : schema) {
+                    if (column.getName().equalsIgnoreCase(entry.getKey())) {
+                        column.setDefineExpr(entry.getValue());
+                        match = true;
+                        break;
+                    }
+                }
+            }
+
             if (!match) {
                 // Compatibility code for older versions of mv
                 // store_id -> mv_store_id
@@ -166,9 +240,6 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
                 // mv_count_sale_amt -> mva_SUM__CASE WHEN `sale_amt` IS NULL THEN 0 ELSE 1 END
                 List<SlotRef> slots = new ArrayList<>();
                 entry.getValue().collect(SlotRef.class, slots);
-                if (slots.size() > 1) {
-                    throw new IOException("DefineExpr have multiple slot in MaterializedIndex, Expr=" + entry.getKey());
-                }
 
                 String name = MaterializedIndexMeta.normalizeName(slots.get(0).toSqlWithoutTbl());
                 Column matchedColumn = null;
@@ -183,7 +254,7 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
                 columnList += "]";
 
                 for (Column column : schema) {
-                    if (CreateMaterializedViewStmt.oldmvColumnBreaker(column.getName()).equals(name)) {
+                    if (CreateMaterializedViewStmt.oldmvColumnBreaker(column.getName()).equalsIgnoreCase(name)) {
                         if (matchedColumn == null) {
                             matchedColumn = column;
                         } else {
@@ -193,8 +264,9 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
                         }
                     }
                 }
+
                 if (matchedColumn != null) {
-                    LOG.debug("trans old MV, MV: {},  DefineExpr:{}, DefineName:{}",
+                    LOG.info("trans old MV: {},  DefineExpr:{}, DefineName:{}",
                             matchedColumn.getName(), entry.getValue().toSqlWithoutTbl(), entry.getKey());
                     matchedColumn.setDefineExpr(entry.getValue());
                     matchedColumn.setDefineName(entry.getKey());
@@ -215,13 +287,14 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
         return normalizeName(lhs).equalsIgnoreCase(normalizeName(rhs));
     }
 
+    public Column getColumnByDefineName(String colDefineName) {
+        String normalizedName = normalizeName(colDefineName);
+        return definedNameToColumn.getOrDefault(normalizedName, null);
+    }
+
     public Column getColumnByName(String columnName) {
-        for (Column column : schema) {
-            if (matchColumnName(column.getName(), columnName)) {
-                return column;
-            }
-        }
-        return null;
+        String normalizedName = normalizeName(columnName);
+        return nameToColumn.getOrDefault(normalizedName, null);
     }
 
     public OriginStatement getDefineStmt() {
@@ -258,6 +331,10 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
 
     @Override
     public void gsonPostProcess() throws IOException {
+        initColumnNameMap();
+    }
+
+    public void parseStmt(Analyzer analyzer) throws IOException {
         // analyze define stmt
         if (defineStmt == null) {
             return;
@@ -268,11 +345,25 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
         CreateMaterializedViewStmt stmt;
         try {
             stmt = (CreateMaterializedViewStmt) SqlParserUtils.getStmt(parser, defineStmt.idx);
-            setWhereClause(stmt.getWhereClause());
             stmt.setIsReplay(true);
+            if (analyzer != null) {
+                try {
+                    stmt.analyze(analyzer);
+                } catch (Exception e) {
+                    LOG.warn("CreateMaterializedViewStmt analyze failed, mv=" + defineStmt.originStmt + ", reason=", e);
+                    return;
+                }
+            }
+
+            setWhereClause(stmt.getWhereClause());
             stmt.rewriteToBitmapWithCheck();
-            Map<String, Expr> columnNameToDefineExpr = stmt.parseDefineExprWithoutAnalyze();
-            setColumnsDefineExpr(columnNameToDefineExpr);
+            try {
+                Map<String, Expr> columnNameToDefineExpr = stmt.parseDefineExpr(analyzer);
+                setColumnsDefineExpr(columnNameToDefineExpr);
+            } catch (Exception e) {
+                LOG.warn("CreateMaterializedViewStmt parseDefineExpr failed, reason=", e);
+            }
+
         } catch (Exception e) {
             throw new IOException("error happens when parsing create materialized view stmt: " + defineStmt, e);
         }
@@ -296,8 +387,27 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
         maxColUniqueId = Column.COLUMN_UNIQUE_ID_INIT_VALUE;
         this.schema.forEach(column -> {
             column.setUniqueId(incAndGetMaxColUniqueId());
-            LOG.debug("indexId: {},  column:{}, uniqueId:{}",
-                    indexId, column, column.getUniqueId());
+            this.indexes.forEach(index -> {
+                index.getColumns().forEach(col -> {
+                    if (col.equalsIgnoreCase(column.getName())) {
+                        index.getColumnUniqueIds().add(column.getUniqueId());
+                    }
+                });
+            });
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("indexId: {},  column:{}, uniqueId:{}",
+                        indexId, column, column.getUniqueId());
+            }
         });
+    }
+
+    public void initColumnNameMap() {
+        // case insensitive
+        nameToColumn = Maps.newTreeMap(String.CASE_INSENSITIVE_ORDER);
+        definedNameToColumn = Maps.newTreeMap(String.CASE_INSENSITIVE_ORDER);
+        for (Column column : schema) {
+            nameToColumn.put(normalizeName(column.getName()), column);
+            definedNameToColumn.put(normalizeName(column.getDefineName()), column);
+        }
     }
 }

@@ -18,13 +18,13 @@
 package org.apache.doris.task;
 
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.HdfsResource;
 import org.apache.doris.catalog.Resource;
 import org.apache.doris.catalog.Resource.ResourceType;
-import org.apache.doris.catalog.S3Resource;
+import org.apache.doris.datasource.property.constants.S3Properties;
 import org.apache.doris.policy.Policy;
 import org.apache.doris.policy.StoragePolicy;
 import org.apache.doris.thrift.TPushStoragePolicyReq;
-import org.apache.doris.thrift.TS3StorageParam;
 import org.apache.doris.thrift.TStoragePolicy;
 import org.apache.doris.thrift.TStorageResource;
 import org.apache.doris.thrift.TTaskType;
@@ -63,8 +63,9 @@ public class PushStoragePolicyTask extends AgentTask {
                 StoragePolicy storagePolicy = (StoragePolicy) p;
                 String resourceName = storagePolicy.getStorageResource();
                 Resource resource = Env.getCurrentEnv().getResourceMgr().getResource(resourceName);
-                if (resource == null || resource.getType() != ResourceType.S3) {
-                    LOG.warn("can't find s3 resource by name {}", resourceName);
+                if (resource == null || (resource.getType() != ResourceType.S3
+                        && resource.getType() != ResourceType.HDFS)) {
+                    LOG.warn("can't find s3 resource or hdfs resource by name {}", resourceName);
                     return;
                 }
                 item.setResourceId(resource.getId());
@@ -86,25 +87,12 @@ public class PushStoragePolicyTask extends AgentTask {
             item.setId(r.getId());
             item.setName(r.getName());
             item.setVersion(r.getVersion());
-            TS3StorageParam s3Info = new TS3StorageParam();
-            S3Resource s3Resource = (S3Resource) r;
-            s3Info.setEndpoint(s3Resource.getProperty(S3Resource.S3_ENDPOINT));
-            s3Info.setRegion(s3Resource.getProperty(S3Resource.S3_REGION));
-            s3Info.setAk(s3Resource.getProperty(S3Resource.S3_ACCESS_KEY));
-            s3Info.setSk(s3Resource.getProperty(S3Resource.S3_SECRET_KEY));
-            s3Info.setRootPath(s3Resource.getProperty(S3Resource.S3_ROOT_PATH));
-            s3Info.setBucket(s3Resource.getProperty(S3Resource.S3_BUCKET));
-            String maxConnections = s3Resource.getProperty(S3Resource.S3_MAX_CONNECTIONS);
-            s3Info.setMaxConn(Integer.parseInt(maxConnections == null
-                    ? S3Resource.DEFAULT_S3_MAX_CONNECTIONS : maxConnections));
-            String requestTimeoutMs = s3Resource.getProperty(S3Resource.S3_REQUEST_TIMEOUT_MS);
-            s3Info.setMaxConn(Integer.parseInt(requestTimeoutMs == null
-                    ? S3Resource.DEFAULT_S3_REQUEST_TIMEOUT_MS : requestTimeoutMs));
-            String connTimeoutMs = s3Resource.getProperty(S3Resource.S3_CONNECTION_TIMEOUT_MS);
-            s3Info.setMaxConn(Integer.parseInt(connTimeoutMs == null
-                    ? S3Resource.DEFAULT_S3_CONNECTION_TIMEOUT_MS : connTimeoutMs));
+            if (r.getType() == ResourceType.S3) {
+                item.setS3StorageParam(S3Properties.getS3TStorageParam(r.getCopiedProperties()));
+            } else if (r.getType() == ResourceType.HDFS) {
+                item.setHdfsStorageParam(HdfsResource.generateHdfsParam(r.getCopiedProperties()));
+            }
             r.readUnlock();
-            item.setS3StorageParam(s3Info);
             tStorageResources.add(item);
         });
         ret.setResource(tStorageResources);

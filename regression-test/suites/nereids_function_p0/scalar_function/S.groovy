@@ -97,26 +97,11 @@ suite("nereids_scalar_fn_S") {
 	qt_sql_sm3sum_Varchar_notnull "select sm3sum(kvchrs1) from fn_test_not_nullable order by kvchrs1"
 	qt_sql_sm3sum_String "select sm3sum(kstr) from fn_test order by kstr"
 	qt_sql_sm3sum_String_notnull "select sm3sum(kstr) from fn_test_not_nullable order by kstr"
+	
 	sql "select sm4_decrypt(kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1"
-	test {
-        sql "select sm4_decrypt_v2(kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1"
-        exception "Incorrect parameter count in the call to native function 'sm4_decrypt'"
-    }
 	sql "select sm4_decrypt(kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1"
-	test {
-        sql "select sm4_decrypt_v2(kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1"
-        exception "Incorrect parameter count in the call to native function 'sm4_decrypt'"
-    }
 	sql "select sm4_decrypt(kstr, kstr) from fn_test order by kstr, kstr"
-	test {
-        sql "select sm4_decrypt_v2(kstr, kstr) from fn_test order by kstr, kstr"
-        exception "Incorrect parameter count in the call to native function 'sm4_decrypt'"
-    }
 	sql "select sm4_decrypt(kstr, kstr) from fn_test_not_nullable order by kstr, kstr"
-	test {
-        sql "select sm4_decrypt_v2(kstr, kstr) from fn_test_not_nullable order by kstr, kstr"
-        exception "Incorrect parameter count in the call to native function 'sm4_decrypt'"
-    }
 	sql "select sm4_decrypt(kvchrs1, kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1, kvchrs1"
 	sql "select sm4_decrypt(kvchrs1, kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1, kvchrs1"
 	sql "select sm4_decrypt(kstr, kstr, kstr) from fn_test order by kstr, kstr, kstr"
@@ -125,34 +110,11 @@ suite("nereids_scalar_fn_S") {
 	sql "select sm4_decrypt(kvchrs1, kvchrs1, kvchrs1, 'SM4_128_ECB') from fn_test_not_nullable order by kvchrs1, kvchrs1, kvchrs1"
 	sql "select sm4_decrypt(kstr, kstr, kstr, 'SM4_128_ECB') from fn_test order by kstr, kstr, kstr"
 	sql "select sm4_decrypt(kstr, kstr, kstr, 'SM4_128_ECB') from fn_test_not_nullable order by kstr, kstr, kstr"
-	sql "select sm4_decrypt_v2(kvchrs1, kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1, kvchrs1"
-	sql "select sm4_decrypt_v2(kvchrs1, kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1, kvchrs1"
-	sql "select sm4_decrypt_v2(kstr, kstr, kstr) from fn_test order by kstr, kstr, kstr"
-	sql "select sm4_decrypt_v2(kstr, kstr, kstr) from fn_test_not_nullable order by kstr, kstr, kstr"
-	sql "select sm4_decrypt_v2(kvchrs1, kvchrs1, kvchrs1, 'SM4_128_ECB') from fn_test order by kvchrs1, kvchrs1, kvchrs1"
-	sql "select sm4_decrypt_v2(kvchrs1, kvchrs1, kvchrs1, 'SM4_128_ECB') from fn_test_not_nullable order by kvchrs1, kvchrs1, kvchrs1"
-	sql "select sm4_decrypt_v2(kstr, kstr, kstr, 'SM4_128_ECB') from fn_test order by kstr, kstr, kstr"
-	sql "select sm4_decrypt_v2(kstr, kstr, kstr, 'SM4_128_ECB') from fn_test_not_nullable order by kstr, kstr, kstr"
+
 	sql "select sm4_encrypt(kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1"
-	test {
-        sql "select sm4_encrypt_v2(kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1"
-        exception "Incorrect parameter count in the call to native function 'sm4_encrypt'"
-    }
 	sql "select sm4_encrypt(kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1"
-	test {
-        sql "select sm4_encrypt_v2(kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1"
-        exception "Incorrect parameter count in the call to native function 'sm4_encrypt'"
-    }
 	sql "select sm4_encrypt(kstr, kstr) from fn_test order by kstr, kstr"
-	test {
-        sql "select sm4_encrypt_v2(kstr, kstr) from fn_test order by kstr, kstr"
-        exception "Incorrect parameter count in the call to native function 'sm4_encrypt'"
-    }
 	sql "select sm4_encrypt(kstr, kstr) from fn_test_not_nullable order by kstr, kstr"
-	test {
-        sql "select sm4_encrypt_v2(kstr, kstr) from fn_test_not_nullable order by kstr, kstr"
-        exception "Incorrect parameter count in the call to native function 'sm4_encrypt'"
-    }
 	sql "select sm4_encrypt(kvchrs1, kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1, kvchrs1"
 	sql "select sm4_encrypt(kvchrs1, kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1, kvchrs1"
 	sql "select sm4_encrypt(kstr, kstr, kstr) from fn_test order by kstr, kstr, kstr"
@@ -161,16 +123,10 @@ suite("nereids_scalar_fn_S") {
 	sql "select sm4_encrypt(kvchrs1, kvchrs1, kvchrs1, 'SM4_128_ECB') from fn_test_not_nullable order by kvchrs1, kvchrs1, kvchrs1"
 	sql "select sm4_encrypt(kstr, kstr, kstr, 'SM4_128_ECB') from fn_test order by kstr, kstr, kstr"
 	sql "select sm4_encrypt(kstr, kstr, kstr, 'SM4_128_ECB') from fn_test_not_nullable order by kstr, kstr, kstr"
-	sql "select sm4_encrypt_v2(kvchrs1, kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1, kvchrs1"
-	sql "select sm4_encrypt_v2(kvchrs1, kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1, kvchrs1"
-	sql "select sm4_encrypt_v2(kstr, kstr, kstr) from fn_test order by kstr, kstr, kstr"
-	sql "select sm4_encrypt_v2(kstr, kstr, kstr) from fn_test_not_nullable order by kstr, kstr, kstr"
-	sql "select sm4_encrypt_v2(kvchrs1, kvchrs1, kvchrs1, 'SM4_128_ECB') from fn_test order by kvchrs1, kvchrs1, kvchrs1"
-	sql "select sm4_encrypt_v2(kvchrs1, kvchrs1, kvchrs1, 'SM4_128_ECB') from fn_test_not_nullable order by kvchrs1, kvchrs1, kvchrs1"
-	sql "select sm4_encrypt_v2(kstr, kstr, kstr, 'SM4_128_ECB') from fn_test order by kstr, kstr, kstr"
-	sql "select sm4_encrypt_v2(kstr, kstr, kstr, 'SM4_128_ECB') from fn_test_not_nullable order by kstr, kstr, kstr"
+
 	sql "select space(10) from fn_test order by kint"
 	sql "select space(10) from fn_test_not_nullable order by kint"
+	sql """select k from (select length(space(number)) k from numbers("number" = "10"))t;""" // before #44919 will crash
 	qt_sql_split_part_Varchar_Varchar_Integer "select split_part(kvchrs1, ' ', 1) from fn_test order by kvchrs1"
 	qt_sql_split_part_Varchar_Varchar_Integer_notnull "select split_part(kvchrs1, ' ', 1) from fn_test_not_nullable order by kvchrs1"
 	qt_sql_split_part_String_String_Integer "select split_part(kstr, ' ', 1) from fn_test order by kstr"
@@ -194,6 +150,10 @@ suite("nereids_scalar_fn_S") {
 	qt_sql_st_distance_sphere_Double_Double_Double_Double_notnull "select st_distance_sphere(x_lng, x_lat, y_lng, y_lat) from fn_test_not_nullable order by 1"
 	qt_sql_st_angle_sphere_Double_Double_Double_Double "select st_angle_sphere(x_lng, x_lat, y_lng, y_lat) from fn_test order by 1"
     qt_sql_st_angle_sphere_Double_Double_Double_Double_notnull "select st_angle_sphere(x_lng, x_lat, y_lng, y_lat) from fn_test_not_nullable order by 1"
+    qt_sql_st_angle_Varchar_Varchar "select st_angle(st_point(x_lng, x_lat), st_point(y_lng, y_lat), st_point(z_lng, z_lat)) from fn_test order by 1"
+    qt_sql_st_angle_Varchar_Varchar_notnull "select st_angle(st_point(x_lng, x_lat), st_point(y_lng, y_lat), st_point(z_lng, z_lat)) from fn_test order by 1"
+    qt_sql_st_azimuth_Varchar_Varchar "select st_azimuth(st_point(x_lng, x_lat), st_point(y_lng, y_lat)) from fn_test order by 1"
+    qt_sql_st_azimuth_Varchar_Varchar_notnull "select st_azimuth(st_point(x_lng, x_lat), st_point(y_lng, y_lat)) from fn_test order by 1"
     qt_sql_st_area_square_meters_circle "select ST_Area_Square_Meters(ST_Circle(x_lng, x_lat, radius)) from fn_test order by 1"
     qt_sql_st_area_square_meters_circle_notnull "select ST_Area_Square_Meters(ST_Circle(x_lng, x_lat, radius)) from fn_test_not_nullable order by 1"
     qt_sql_st_area_square_meters_polygon "select ST_Area_Square_Meters(st_polygon(polygon_wkt)) from fn_test order by 1"
@@ -240,6 +200,12 @@ suite("nereids_scalar_fn_S") {
 	qt_sql_st_y_Varchar_notnull "select st_y(st_point(x_lng, x_lat)) from fn_test_not_nullable order by 1"
 	qt_sql_st_y_String "select st_y(st_point(x_lng, x_lat)) from fn_test order by 1"
 	qt_sql_st_y_String_notnull "select st_y(st_point(x_lng, x_lat)) from fn_test_not_nullable order by 1"
+	qt_sql_st_asbinary_Varchar "select ST_AsBinary(st_point(x_lng, x_lat)) from fn_test order by 1"
+    qt_sql_st_asbinary_Varchar_notnull "select ST_AsBinary(st_point(x_lng, x_lat)) from fn_test_not_nullable order by 1"
+	qt_sql_st_geometryfromwkb_Varchar "select ST_AsText(ST_GeometryFromWKB(ST_AsBinary(st_polyfromtext(polygon_wkt)))) from fn_test order by 1"
+    qt_sql_st_geometryfromwkb_Varchar_notnull "select ST_AsText(ST_GeometryFromWKB(ST_AsBinary(st_polyfromtext(polygon_wkt)))) from fn_test_not_nullable order by 1"
+	qt_sql_st_geomfromwkb_Varchar "select ST_AsText(ST_GeomFromWKB(ST_AsBinary(st_polyfromtext(polygon_wkt)))) from fn_test order by 1"
+    qt_sql_st_geomfromwkb_Varchar_notnull "select ST_AsText(ST_GeomFromWKB(ST_AsBinary(st_polyfromtext(polygon_wkt)))) from fn_test_not_nullable order by 1"
 
 	qt_sql_starts_with_Varchar_Varchar "select starts_with(kvchrs1, kvchrs1) from fn_test order by kvchrs1, kvchrs1"
 	qt_sql_starts_with_Varchar_Varchar_notnull "select starts_with(kvchrs1, kvchrs1) from fn_test_not_nullable order by kvchrs1, kvchrs1"

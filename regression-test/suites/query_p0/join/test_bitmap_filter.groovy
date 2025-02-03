@@ -25,8 +25,8 @@ suite("test_bitmap_filter", "query_p0") {
     sql """
     CREATE TABLE ${tbl2} (
       `k1` int(11) NULL,
-      `k2` bitmap BITMAP_UNION NULL,
-      `k3` bitmap BITMAP_UNION NULL
+      `k2` bitmap BITMAP_UNION ,
+      `k3` bitmap BITMAP_UNION 
     ) ENGINE=OLAP
     AGGREGATE KEY(`k1`)
     COMMENT 'OLAP'
@@ -77,6 +77,8 @@ suite("test_bitmap_filter", "query_p0") {
 
     qt_sql18 "select k1, k2 from ${tbl1} t where 100 not in (select k2 from ${tbl2}) order by 1, 2;"
 
+    qt_sql19 "select k1 from ${tbl1} t where k1 in (select k2 from ${tbl2} where bitmap_count(k2) > 6) order by 1;"
+
     test {
         sql "select k1, k2 from ${tbl1} b1 where k1 in (select k2 from ${tbl2} b2 where b1.k2 = b2.k1) order by k1;"
         exception "In bitmap does not support correlated subquery"
@@ -84,6 +86,6 @@ suite("test_bitmap_filter", "query_p0") {
 
     test {
         sql "select k1, count(*) from ${tbl1} b1 group by k1 having k1 in (select k2 from ${tbl2} b2) order by k1;"
-        exception "HAVING clause dose not support in bitmap"
+        exception "Doris hll, bitmap, array, map, struct, jsonb, variant column must use with specific function, and don't support filter, group by or order by."
     }
 }

@@ -17,11 +17,11 @@
 
 #pragma once
 
-#include "gen_cpp/Types_types.h"
+#include <gen_cpp/Types_types.h>
 
 namespace doris {
 
-enum ReaderType {
+enum class ReaderType : uint8_t {
     READER_QUERY = 0,
     READER_ALTER_TABLE = 1,
     READER_BASE_COMPACTION = 2,
@@ -29,40 +29,44 @@ enum ReaderType {
     READER_CHECKSUM = 4,
     READER_COLD_DATA_COMPACTION = 5,
     READER_SEGMENT_COMPACTION = 6,
+    READER_FULL_COMPACTION = 7,
+    UNKNOWN = 8
 };
 
 namespace io {
 
 struct FileCacheStatistics {
-    int64_t num_io_total = 0;
-    int64_t num_io_hit_cache = 0;
-    int64_t num_io_bytes_read_total = 0;
-    int64_t num_io_bytes_read_from_file_cache = 0;
-    int64_t num_io_bytes_read_from_write_cache = 0;
-    int64_t num_io_written_in_file_cache = 0;
-    int64_t num_io_bytes_written_in_file_cache = 0;
-    int64_t num_io_bytes_skip_cache = 0;
+    int64_t num_local_io_total = 0;
+    int64_t num_remote_io_total = 0;
+    int64_t num_inverted_index_remote_io_total = 0;
+    int64_t local_io_timer = 0;
+    int64_t bytes_read_from_local = 0;
+    int64_t bytes_read_from_remote = 0;
+    int64_t remote_io_timer = 0;
+    int64_t write_cache_io_timer = 0;
+    int64_t bytes_write_into_cache = 0;
+    int64_t num_skip_cache_io_total = 0;
+    int64_t read_cache_file_directly_timer = 0;
+    int64_t cache_get_or_set_timer = 0;
+    int64_t lock_wait_timer = 0;
+    int64_t get_timer = 0;
+    int64_t set_timer = 0;
 };
 
-class IOContext {
-public:
-    IOContext() = default;
-
-    IOContext(const TUniqueId* query_id_, FileCacheStatistics* stats_, bool is_presistent_,
-              bool use_disposable_cache_, bool read_segment_index_, bool enable_file_cache)
-            : query_id(query_id_),
-              is_persistent(is_presistent_),
-              use_disposable_cache(use_disposable_cache_),
-              read_segment_index(read_segment_index_),
-              file_cache_stats(stats_),
-              enable_file_cache(enable_file_cache) {}
-    ReaderType reader_type;
-    const TUniqueId* query_id = nullptr;
+struct IOContext {
+    ReaderType reader_type = ReaderType::UNKNOWN;
+    // FIXME(plat1ko): Seems `is_disposable` can be inferred from the `reader_type`?
+    bool is_disposable = false;
+    bool is_index_data = false;
+    bool read_file_cache = true;
+    // TODO(lightman): use following member variables to control file cache
     bool is_persistent = false;
-    bool use_disposable_cache = false;
-    bool read_segment_index = false;
-    FileCacheStatistics* file_cache_stats = nullptr;
-    bool enable_file_cache = true;
+    // stop reader when reading, used in some interrupted operations
+    bool should_stop = false;
+    int64_t expiration_time = 0;
+    const TUniqueId* query_id = nullptr;             // Ref
+    FileCacheStatistics* file_cache_stats = nullptr; // Ref
+    bool is_inverted_index = false;
 };
 
 } // namespace io

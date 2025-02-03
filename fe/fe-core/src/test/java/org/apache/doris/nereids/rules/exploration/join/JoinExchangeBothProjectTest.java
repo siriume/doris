@@ -28,12 +28,10 @@ import org.apache.doris.nereids.util.PlanChecker;
 import org.apache.doris.nereids.util.PlanConstructor;
 
 import com.google.common.collect.ImmutableList;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 class JoinExchangeBothProjectTest implements MemoPatternMatchSupported {
     @Test
-    @Disabled
     public void testSimple() {
         LogicalOlapScan scan1 = PlanConstructor.newLogicalOlapScan(0, "t1", 0);
         LogicalOlapScan scan2 = PlanConstructor.newLogicalOlapScan(1, "t2", 0);
@@ -51,26 +49,28 @@ class JoinExchangeBothProjectTest implements MemoPatternMatchSupported {
                                 .project(ImmutableList.of(0, 2))
                                 .build(),
                         JoinType.INNER_JOIN, ImmutableList.of(Pair.of(0, 0), Pair.of(1, 1)))
+                .projectAll()
                 .build();
 
         PlanChecker.from(MemoTestUtils.createConnectContext(), plan)
                 .applyExploration(JoinExchangeBothProject.INSTANCE.build())
                 .matchesExploration(
-                    logicalJoin(
-                        logicalProject(
-                            logicalJoin(
-                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1")),
-                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
-                            )
-                        ),
-                        logicalProject(
-                            logicalJoin(
-                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t2")),
-                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t4"))
+                    logicalProject(
+                        logicalJoin(
+                            logicalProject(
+                                logicalJoin(
+                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1")),
+                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
+                                )
+                            ),
+                            logicalProject(
+                                logicalJoin(
+                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t2")),
+                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t4"))
+                                )
                             )
                         )
                     )
                 );
     }
 }
-

@@ -18,63 +18,75 @@
 package org.apache.doris.nereids.processor.post;
 
 import org.apache.doris.nereids.CascadesContext;
+import org.apache.doris.nereids.processor.post.TopnFilterPushDownVisitor.PushDownContext;
 import org.apache.doris.nereids.trees.expressions.Expression;
-import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.SortPhase;
-import org.apache.doris.nereids.trees.plans.algebra.Filter;
-import org.apache.doris.nereids.trees.plans.algebra.Project;
-import org.apache.doris.nereids.trees.plans.physical.PhysicalOlapScan;
+import org.apache.doris.nereids.trees.plans.algebra.TopN;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalDeferMaterializeTopN;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalTopN;
-import org.apache.doris.qe.ConnectContext;
 
 /**
  * topN opt
  * refer to:
- * https://github.com/apache/doris/pull/15558
- * https://github.com/apache/doris/pull/15663
+ * <a href="https://github.com/apache/doris/pull/15558">...</a>
+ * <a href="https://github.com/apache/doris/pull/15663">...</a>
+ *
+ * // [deprecated] only support simple case: select ... from tbl [where ...] order by ... limit ...
  */
 
 public class TopNScanOpt extends PlanPostProcessor {
     @Override
-    public PhysicalTopN visitPhysicalTopN(PhysicalTopN<? extends Plan> topN, CascadesContext ctx) {
+    public PhysicalTopN<? extends Plan> visitPhysicalTopN(PhysicalTopN<? extends Plan> topN, CascadesContext ctx) {
         topN.child().accept(this, ctx);
-        Plan child = topN.child();
-        if (topN.getSortPhase() != SortPhase.LOCAL_SORT) {
-            return topN;
-        }
-        long threshold = getTopNOptLimitThreshold();
-        if (threshold == -1 || topN.getLimit() > threshold) {
-            return topN;
-        }
-        if (topN.getOrderKeys().isEmpty()) {
-            return topN;
-        }
-        Expression firstKey = topN.getOrderKeys().get(0).getExpr();
-        if (!(firstKey instanceof SlotReference)) {
-            return topN;
-        }
-        if (firstKey.getDataType().isStringLikeType()
-                || firstKey.getDataType().isFloatType()
-                || firstKey.getDataType().isDoubleType()) {
-            return topN;
-        }
-        while (child != null && (child instanceof Project || child instanceof Filter)) {
-            child = child.child(0);
-        }
-        if (child instanceof PhysicalOlapScan) {
-            PhysicalOlapScan scan = (PhysicalOlapScan) child;
-            if (scan.getTable().isDupKeysOrMergeOnWrite()) {
-                topN.setMutableState(PhysicalTopN.TOPN_RUNTIME_FILTER, true);
-            }
+        if (checkTopN(topN)) {
+            TopnFilterPushDownVisitor pusher = new TopnFilterPushDownVisitor(ctx.getTopnFilterContext());
+            TopnFilterPushDownVisitor.PushDownContext pushdownContext = new PushDownContext(topN,
+                    topN.getOrderKeys().get(0).getExpr(),
+                    topN.getOrderKeys().get(0).isNullFirst());
+            topN.accept(pusher, pushdownContext);
         }
         return topN;
     }
 
-    private long getTopNOptLimitThreshold() {
-        if (ConnectContext.get() != null && ConnectContext.get().getSessionVariable() != null) {
-            return ConnectContext.get().getSessionVariable().topnOptLimitThreshold;
+    boolean checkTopN(TopN topN) {
+        if (!(topN instanceof PhysicalTopN) && !(topN instanceof PhysicalDeferMaterializeTopN)) {
+            return false;
         }
-        return -1;
+        if (topN instanceof PhysicalTopN
+                && ((PhysicalTopN) topN).getSortPhase() != SortPhase.LOCAL_SORT) {
+            return false;
+        } else {
+            if (topN instanceof PhysicalDeferMaterializeTopN
+                    && ((PhysicalDeferMaterializeTopN) topN).getSortPhase() != SortPhase.LOCAL_SORT) {
+                return false;
+            }
+        }
+
+        if (topN.getOrderKeys().isEmpty()) {
+            return false;
+        }
+
+        Expression firstKey = topN.getOrderKeys().get(0).getExpr();
+
+        if (firstKey.getDataType().isFloatType()
+                || firstKey.getDataType().isDoubleType()) {
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public Plan visitPhysicalDeferMaterializeTopN(PhysicalDeferMaterializeTopN<? extends Plan> topN,
+            CascadesContext ctx) {
+        topN.child().accept(this, ctx);
+        if (checkTopN(topN)) {
+            TopnFilterPushDownVisitor pusher = new TopnFilterPushDownVisitor(ctx.getTopnFilterContext());
+            TopnFilterPushDownVisitor.PushDownContext pushdownContext = new PushDownContext(topN,
+                    topN.getOrderKeys().get(0).getExpr(),
+                    topN.getOrderKeys().get(0).isNullFirst());
+            topN.accept(pusher, pushdownContext);
+        }
+        return topN;
     }
 }

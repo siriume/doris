@@ -18,7 +18,7 @@
 package org.apache.doris.nereids.rules.exploration.join;
 
 import org.apache.doris.common.Pair;
-import org.apache.doris.nereids.rules.rewrite.logical.PushdownAliasThroughJoin;
+import org.apache.doris.nereids.rules.rewrite.PushDownAliasThroughJoin;
 import org.apache.doris.nereids.trees.expressions.Add;
 import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.EqualTo;
@@ -52,7 +52,6 @@ class InnerJoinLAsscomProjectTest implements MemoPatternMatchSupported {
     private final LogicalOlapScan scan3 = PlanConstructor.newLogicalOlapScan(2, "t3", 0);
 
     @Test
-    @Disabled
     void testSimple() {
         /*
          * Star-Join
@@ -73,21 +72,24 @@ class InnerJoinLAsscomProjectTest implements MemoPatternMatchSupported {
                 .join(scan2, JoinType.INNER_JOIN, Pair.of(0, 0))
                 .project(ImmutableList.of(0, 1, 2))
                 .join(scan3, JoinType.INNER_JOIN, Pair.of(1, 1))
+                .projectAll()
                 .build();
 
         PlanChecker.from(MemoTestUtils.createConnectContext(), plan)
                 .applyExploration(InnerJoinLAsscomProject.INSTANCE.build())
                 .printlnExploration()
                 .matchesExploration(
+                    logicalProject(
                         logicalJoin(
-                                logicalJoin(
-                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1")),
-                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
-                                ),
-                                logicalProject(
-                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t2"))
-                                ).when(project -> project.getProjects().size() == 1)
+                            logicalProject(logicalJoin(
+                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1")),
+                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
+                            )),
+                            logicalProject(
+                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t2"))
+                            ).when(project -> project.getProjects().size() == 1)
                         )
+                    )
                 );
     }
 
@@ -101,7 +103,7 @@ class InnerJoinLAsscomProjectTest implements MemoPatternMatchSupported {
                 .build();
 
         PlanChecker.from(MemoTestUtils.createConnectContext(), plan)
-                .applyTopDown(new PushdownAliasThroughJoin())
+                .applyTopDown(new PushDownAliasThroughJoin())
                 .applyExploration(InnerJoinLAsscomProject.INSTANCE.build())
                 .printlnExploration()
                 .matchesExploration(
@@ -147,7 +149,7 @@ class InnerJoinLAsscomProjectTest implements MemoPatternMatchSupported {
 
         PlanChecker.from(MemoTestUtils.createConnectContext(), topJoin)
                 .printlnTree()
-                .applyTopDown(new PushdownAliasThroughJoin())
+                .applyTopDown(new PushDownAliasThroughJoin())
                 .applyExploration(InnerJoinLAsscomProject.INSTANCE.build())
                 .printlnExploration()
                 .matchesExploration(

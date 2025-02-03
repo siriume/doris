@@ -20,11 +20,26 @@
 
 #pragma once
 
-#include <type_traits>
+#include <fmt/format.h>
+#include <stddef.h>
 
+#include <algorithm>
+#include <boost/iterator/iterator_facade.hpp>
+#include <memory>
+
+#include "common/status.h"
+#include "vec/core/column_numbers.h"
 #include "vec/core/types.h"
 #include "vec/data_types/data_type.h"
 #include "vec/functions/function.h"
+
+namespace doris {
+class FunctionContext;
+
+namespace vectorized {
+class Block;
+} // namespace vectorized
+} // namespace doris
 
 /** Logical functions AND, OR and NOT support three-valued (or ternary) logic
   * https://en.wikibooks.org/wiki/Structured_Query_Language/NULLs_and_the_Three_Valued_Logic
@@ -79,6 +94,14 @@ struct OrImpl {
     static inline constexpr bool special_implementation_for_nulls() { return true; }
 };
 
+struct XorImpl {
+    using ResultType = UInt8;
+
+    static inline constexpr ResultType apply(UInt8 a, UInt8 b) { return a ^ b; }
+    // select null xor true , null xor false , false xor null , true xor  null ;
+    static inline constexpr bool special_implementation_for_nulls() { return false; }
+};
+
 template <typename A>
 struct NotImpl {
     using ResultType = UInt8;
@@ -100,13 +123,12 @@ public:
     bool use_default_implementation_for_nulls() const override {
         return !Impl::special_implementation_for_nulls();
     }
-    bool use_default_implementation_for_constants() const override { return true; }
 
     /// Get result types by argument types. If the function does not apply to these arguments, throw an exception.
     DataTypePtr get_return_type_impl(const DataTypes& arguments) const override;
 
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        size_t result, size_t input_rows_count) override;
+                        uint32_t result, size_t input_rows_count) const override;
 };
 
 template <template <typename> class Impl, typename Name>
@@ -115,17 +137,14 @@ public:
     static constexpr auto name = Name::name;
     static FunctionPtr create() { return std::make_shared<FunctionUnaryLogical>(); }
 
-public:
     String get_name() const override { return name; }
 
     size_t get_number_of_arguments() const override { return 1; }
 
     DataTypePtr get_return_type_impl(const DataTypes& arguments) const override;
 
-    bool use_default_implementation_for_constants() const override { return true; }
-
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        size_t result, size_t input_rows_count) override;
+                        uint32_t result, size_t input_rows_count) const override;
 };
 
 } // namespace FunctionsLogicalDetail
@@ -140,10 +159,17 @@ struct NameNot {
     static constexpr auto name = "not";
 };
 
+struct NameXor {
+    static constexpr auto name = "xor";
+};
+
 using FunctionAnd =
         FunctionsLogicalDetail::FunctionAnyArityLogical<FunctionsLogicalDetail::AndImpl, NameAnd>;
 using FunctionOr =
         FunctionsLogicalDetail::FunctionAnyArityLogical<FunctionsLogicalDetail::OrImpl, NameOr>;
 using FunctionNot =
         FunctionsLogicalDetail::FunctionUnaryLogical<FunctionsLogicalDetail::NotImpl, NameNot>;
+
+using FunctionXor =
+        FunctionsLogicalDetail::FunctionAnyArityLogical<FunctionsLogicalDetail::XorImpl, NameXor>;
 } // namespace doris::vectorized

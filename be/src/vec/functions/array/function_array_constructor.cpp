@@ -14,17 +14,35 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-#include <string_view>
+#include <glog/logging.h>
+#include <stddef.h>
 
+#include <memory>
+#include <ostream>
+#include <string>
+#include <utility>
+
+#include "common/status.h"
+#include "vec/aggregate_functions/aggregate_function.h"
+#include "vec/columns/column.h"
 #include "vec/columns/column_array.h"
-#include "vec/columns/column_string.h"
-#include "vec/common/string_ref.h"
+#include "vec/columns/column_nullable.h"
+#include "vec/columns/column_vector.h"
+#include "vec/columns/columns_number.h"
+#include "vec/core/block.h"
+#include "vec/core/column_numbers.h"
+#include "vec/core/column_with_type_and_name.h"
+#include "vec/core/types.h"
+#include "vec/data_types/data_type.h"
 #include "vec/data_types/data_type_array.h"
+#include "vec/data_types/data_type_nullable.h"
 #include "vec/data_types/data_type_number.h"
-#include "vec/data_types/get_least_supertype.h"
-#include "vec/functions/array/function_array_utils.h"
 #include "vec/functions/function.h"
 #include "vec/functions/simple_function_factory.h"
+
+namespace doris {
+class FunctionContext;
+} // namespace doris
 
 namespace doris::vectorized {
 
@@ -42,26 +60,29 @@ public:
 
     bool use_default_implementation_for_nulls() const override { return false; }
 
-    size_t get_number_of_arguments() const override { return 1; }
+    size_t get_number_of_arguments() const override { return 0; }
 
     DataTypePtr get_return_type_impl(const DataTypes& arguments) const override {
-        DCHECK(arguments.size() > 0)
-                << "function: " << get_name() << ", arguments should not be empty";
+        // we accept with empty argument, like array(), which will be treated as array(UInt8)
+        if (arguments.empty()) {
+            return std::make_shared<DataTypeArray>(
+                    make_nullable(std::make_shared<DataTypeUInt8>()));
+        }
         return std::make_shared<DataTypeArray>(make_nullable(remove_nullable(arguments[0])));
     }
 
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        size_t result, size_t input_rows_count) override {
+                        uint32_t result, size_t input_rows_count) const override {
         size_t num_element = arguments.size();
         auto result_col = block.get_by_position(result).type->create_column();
-        auto result_array_col = static_cast<ColumnArray*>(result_col.get());
+        auto* result_array_col = static_cast<ColumnArray*>(result_col.get());
         IColumn& result_nested_col = result_array_col->get_data();
         ColumnArray::Offsets64& result_offset_col = result_array_col->get_offsets();
         result_nested_col.reserve(input_rows_count * num_element);
         result_offset_col.resize(input_rows_count);
 
         // convert to nullable column
-        ColumnPtr arg[num_element];
+        std::vector<ColumnPtr> arg(num_element);
         for (size_t i = 0; i < num_element; ++i) {
             auto& col = block.get_by_position(arguments[i]).column;
             col = col->convert_to_full_column_if_const();

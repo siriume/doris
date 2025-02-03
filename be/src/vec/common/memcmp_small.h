@@ -23,7 +23,7 @@
 #include <algorithm>
 #include <cstdint>
 
-namespace detail {
+namespace doris::vectorized::detail {
 
 template <typename T>
 int cmp(T a, T b) {
@@ -32,18 +32,14 @@ int cmp(T a, T b) {
     return 0;
 }
 
-} // namespace detail
+} // namespace doris::vectorized::detail
 
 /// We can process uninitialized memory in the functions below.
 /// Results don't depend on the values inside uninitialized memory but Memory Sanitizer cannot see it.
 /// Disable optimized functions if compile with Memory Sanitizer.
 
-#if (defined(__SSE2__) || defined(__aarch64__)) && !defined(MEMORY_SANITIZER)
-#ifdef __SSE2__
-#include <emmintrin.h>
-#elif __aarch64__
-#include <sse2neon.h>
-#endif
+#if (defined(__SSE2__) && !defined(__aarch64__)) && !defined(MEMORY_SANITIZER)
+#include "util/sse_util.hpp"
 
 /** All functions works under the following assumptions:
   * - it's possible to read up to 15 excessive bytes after end of 'a' and 'b' region;
@@ -67,11 +63,11 @@ int memcmp_small_allow_overflow15(const Char* a, size_t a_size, const Char* b, s
 
             if (offset >= min_size) break;
 
-            return detail::cmp(a[offset], b[offset]);
+            return doris::vectorized::detail::cmp(a[offset], b[offset]);
         }
     }
 
-    return detail::cmp(a_size, b_size);
+    return doris::vectorized::detail::cmp(a_size, b_size);
 }
 
 /** Variant when memory regions have same size.
@@ -90,7 +86,7 @@ int memcmp_small_allow_overflow15(const Char* a, const Char* b, size_t size) {
 
             if (offset >= size) return 0;
 
-            return detail::cmp(a[offset], b[offset]);
+            return doris::vectorized::detail::cmp(a[offset], b[offset]);
         }
     }
 
@@ -130,7 +126,7 @@ int memcmp_small_multiple_of16(const Char* a, const Char* b, size_t size) {
 
         if (mask) {
             offset += __builtin_ctz(mask);
-            return detail::cmp(a[offset], b[offset]);
+            return doris::vectorized::detail::cmp(a[offset], b[offset]);
         }
     }
 
@@ -148,7 +144,7 @@ int memcmp16(const Char* a, const Char* b) {
 
     if (mask) {
         auto offset = __builtin_ctz(mask);
-        return detail::cmp(a[offset], b[offset]);
+        return doris::vectorized::detail::cmp(a[offset], b[offset]);
     }
 
     return 0;
@@ -190,7 +186,7 @@ int memcmp_small_allow_overflow15(const Char* a, size_t a_size, const Char* b, s
     if (auto res = memcmp(a, b, std::min(a_size, b_size)))
         return res;
     else
-        return detail::cmp(a_size, b_size);
+        return doris::vectorized::detail::cmp(a_size, b_size);
 }
 
 template <typename Char>

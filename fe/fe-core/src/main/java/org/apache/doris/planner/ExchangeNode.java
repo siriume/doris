@@ -24,17 +24,13 @@ import org.apache.doris.analysis.Analyzer;
 import org.apache.doris.analysis.SortInfo;
 import org.apache.doris.analysis.TupleDescriptor;
 import org.apache.doris.analysis.TupleId;
-import org.apache.doris.catalog.Env;
 import org.apache.doris.common.UserException;
-import org.apache.doris.common.util.VectorizedUtil;
+import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.statistics.StatisticalType;
 import org.apache.doris.statistics.StatsRecursiveDerive;
-import org.apache.doris.system.Backend;
-import org.apache.doris.system.SystemInfoService;
 import org.apache.doris.thrift.TExchangeNode;
 import org.apache.doris.thrift.TExplainLevel;
-import org.apache.doris.thrift.TNodeInfo;
-import org.apache.doris.thrift.TPaloNodesInfo;
+import org.apache.doris.thrift.TPartitionType;
 import org.apache.doris.thrift.TPlanNode;
 import org.apache.doris.thrift.TPlanNodeType;
 
@@ -44,6 +40,8 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.util.Collections;
 
 /**
  * Receiver side of a 1:n data stream. Logically, an ExchangeNode consumes the data
@@ -67,6 +65,29 @@ public class ExchangeNode extends PlanNode {
     // exchange node. Null if this exchange does not merge sorted streams
     private SortInfo mergeInfo;
 
+    private boolean isRightChildOfBroadcastHashJoin = false;
+    private TPartitionType partitionType;
+
+    /**
+     * use for Nereids only.
+     */
+    public ExchangeNode(PlanNodeId id, PlanNode inputNode) {
+        super(id, inputNode, EXCHANGE_NODE, StatisticalType.EXCHANGE_NODE);
+        offset = 0;
+        limit = -1;
+        this.conjuncts = Collections.emptyList();
+        children.add(inputNode);
+        computeTupleIds();
+    }
+
+    public TPartitionType getPartitionType() {
+        return partitionType;
+    }
+
+    public void setPartitionType(TPartitionType partitionType) {
+        this.partitionType = partitionType;
+    }
+
     /**
      * Create ExchangeNode that consumes output of inputNode.
      * An ExchangeNode doesn't have an input node as a child, which is why we
@@ -89,26 +110,29 @@ public class ExchangeNode extends PlanNode {
         computeTupleIds();
     }
 
-    public boolean isMergingExchange() {
-        if (mergeInfo != null) {
-            return true;
-        }
-        return false;
+    public boolean isFunctionalExchange() {
+        return mergeInfo != null || limit != -1 || offset != 0;
     }
 
     @Override
     public final void computeTupleIds() {
         PlanNode inputNode = getChild(0);
         TupleDescriptor outputTupleDesc = inputNode.getOutputTupleDesc();
+        updateTupleIds(outputTupleDesc);
+    }
+
+    public void updateTupleIds(TupleDescriptor outputTupleDesc) {
         if (outputTupleDesc != null) {
             tupleIds.clear();
             tupleIds.add(outputTupleDesc.getId());
+            tblRefIds.add(outputTupleDesc.getId());
+            nullableTupleIds.add(outputTupleDesc.getId());
         } else {
             clearTupleIds();
             tupleIds.addAll(getChild(0).getTupleIds());
+            tblRefIds.addAll(getChild(0).getTblRefIds());
+            nullableTupleIds.addAll(getChild(0).getNullableTupleIds());
         }
-        tblRefIds.addAll(getChild(0).getTblRefIds());
-        nullableTupleIds.addAll(getChild(0).getNullableTupleIds());
     }
 
     @Override
@@ -131,18 +155,25 @@ public class ExchangeNode extends PlanNode {
         }
     }
 
+    public SortInfo getMergeInfo() {
+        return mergeInfo;
+    }
+
     /**
      * Set the parameters used to merge sorted input streams. This can be called
      * after init().
      */
     public void setMergeInfo(SortInfo info) {
         this.mergeInfo = info;
-        this.planNodeName = VectorizedUtil.isVectorized() ? "V" + MERGING_EXCHANGE_NODE
-                : MERGING_EXCHANGE_NODE;
+        this.planNodeName =  "V" + MERGING_EXCHANGE_NODE;
     }
 
     @Override
     protected void toThrift(TPlanNode msg) {
+        // If this fragment has another scan node, this exchange node is serial or not should be decided by the scan
+        // node.
+        msg.setIsSerialOperator((isSerialOperator() || fragment.hasSerialScanNode())
+                && fragment.useSerialSource(ConnectContext.get()));
         msg.node_type = TPlanNodeType.EXCHANGE_NODE;
         msg.exchange_node = new TExchangeNode();
         for (TupleId tid : tupleIds) {
@@ -150,11 +181,9 @@ public class ExchangeNode extends PlanNode {
         }
         if (mergeInfo != null) {
             msg.exchange_node.setSortInfo(mergeInfo.toThrift());
-            if (mergeInfo.useTwoPhaseRead()) {
-                msg.exchange_node.setNodesInfo(createNodesInfo());
-            }
         }
         msg.exchange_node.setOffset(offset);
+        msg.exchange_node.setPartitionType(partitionType);
     }
 
     @Override
@@ -175,17 +204,46 @@ public class ExchangeNode extends PlanNode {
         return prefix + "offset: " + offset + "\n";
     }
 
+    public boolean isRightChildOfBroadcastHashJoin() {
+        return isRightChildOfBroadcastHashJoin;
+    }
+
+    public void setRightChildOfBroadcastHashJoin(boolean value) {
+        isRightChildOfBroadcastHashJoin = value;
+    }
+
     /**
-    * Set the parameters used to fetch data by rowid column
-    * after init().
-    */
-    private TPaloNodesInfo createNodesInfo() {
-        TPaloNodesInfo nodesInfo = new TPaloNodesInfo();
-        SystemInfoService systemInfoService = Env.getCurrentSystemInfo();
-        for (Long id : systemInfoService.getBackendIds(true /*need alive*/)) {
-            Backend backend = systemInfoService.getBackend(id);
-            nodesInfo.addToNodes(new TNodeInfo(backend.getId(), 0, backend.getIp(), backend.getBrpcPort()));
-        }
-        return nodesInfo;
+     * If table `t1` has unique key `k1` and value column `v1`.
+     * Now use plan below to load data into `t1`:
+     * ```
+     * FRAGMENT 0:
+     *  Merging Exchange (id = 1)
+     *   NL Join (id = 2)
+     *  DataStreamSender (id = 3, dst_id = 3) (TABLET_SINK_SHUFFLE_PARTITIONED)
+     *
+     * FRAGMENT 1:
+     *  Exchange (id = 3)
+     *  OlapTableSink (id = 4) ```
+     *
+     * In this plan, `Exchange (id = 1)` needs to do merge sort using column `k1` and `v1` so parallelism
+     * of FRAGMENT 0 must be 1 and data will be shuffled to FRAGMENT 1 which also has only 1 instance
+     * because this loading job relies on the global ordering of column `k1` and `v1`.
+     *
+     * So FRAGMENT 0 should not use serial source.
+     */
+    @Override
+    public boolean isSerialOperator() {
+        return (ConnectContext.get() != null && ConnectContext.get().getSessionVariable().isUseSerialExchange()
+                || partitionType == TPartitionType.UNPARTITIONED) && mergeInfo != null;
+    }
+
+    @Override
+    public boolean hasSerialChildren() {
+        return isSerialOperator();
+    }
+
+    @Override
+    public boolean hasSerialScanChildren() {
+        return false;
     }
 }

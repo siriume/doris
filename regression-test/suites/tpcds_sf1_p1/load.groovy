@@ -55,7 +55,7 @@ suite("load") {
         sql new File("""${context.file.parent}/ddl/${table}.sql""").text
     }
 
-    sql "set global exec_mem_limit=8G;"
+    sql "set exec_mem_limit=8G;"
 
     for (String tableName in tables) {
         streamLoad {
@@ -99,4 +99,10 @@ suite("load") {
             }
         }
     }
+
+    Thread.sleep(70000) // wait for row count report of the tables just loaded
+    for (String tableName in tables) {
+        sql """ ANALYZE TABLE $tableName WITH SYNC """
+    }
+    sql """ sync """
 }

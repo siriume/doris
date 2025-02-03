@@ -17,30 +17,41 @@
 
 #pragma once
 
-#include "vec/columns/column.h"
-#include "vec/columns/column_array.h"
-#include "vec/columns/column_nullable.h"
-#include "vec/common/string_ref.h"
+#include <cstddef>
+
+#include "common/status.h"
+#include "vec/data_types/data_type.h"
 #include "vec/exprs/table_function/table_function.h"
 #include "vec/functions/array/function_array_utils.h"
 
 namespace doris::vectorized {
+#include "common/compile_check_begin.h"
+
+class Block;
+} // namespace doris::vectorized
+
+namespace doris::vectorized {
 
 class VExplodeTableFunction : public TableFunction {
+    ENABLE_FACTORY_CREATOR(VExplodeTableFunction);
+
 public:
     VExplodeTableFunction();
 
     ~VExplodeTableFunction() override = default;
 
-    Status process_init(Block* block) override;
-    Status process_row(size_t row_idx) override;
-    Status process_close() override;
-    void get_value(MutableColumnPtr& column) override;
+    Status process_init(Block* block, RuntimeState* state) override;
+    void process_row(size_t row_idx) override;
+    void process_close() override;
+    void get_same_many_values(MutableColumnPtr& column, int length) override;
+    int get_value(MutableColumnPtr& column, int max_step) override;
 
 private:
+    Status _process_init_variant(Block* block, int value_column_idx);
     ColumnPtr _array_column;
     ColumnArrayExecutionData _detail;
     size_t _array_offset; // start offset of array[row_idx]
 };
 
+#include "common/compile_check_end.h"
 } // namespace doris::vectorized

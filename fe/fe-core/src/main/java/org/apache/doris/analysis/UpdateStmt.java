@@ -30,11 +30,11 @@ import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.qe.ConnectContext;
-import org.apache.doris.qe.SessionVariable;
 
 import com.google.common.collect.Lists;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -56,8 +56,8 @@ import java.util.TreeSet;
  * value:
  *     {expr}
  */
-public class UpdateStmt extends DdlStmt {
-
+@Deprecated
+public class UpdateStmt extends DdlStmt implements NotFallbackInParser {
     private TableRef targetTableRef;
     private TableName tableName;
     private final List<BinaryPredicate> setExprs;
@@ -67,6 +67,7 @@ public class UpdateStmt extends DdlStmt {
     private TableIf targetTable;
     List<SelectListItem> selectListItems = Lists.newArrayList();
     List<String> cols = Lists.newArrayList();
+    private boolean isPartialUpdate = false;
 
     public UpdateStmt(TableRef targetTableRef, List<BinaryPredicate> setExprs, FromClause fromClause, Expr whereExpr) {
         this.targetTableRef = targetTableRef;
@@ -86,7 +87,7 @@ public class UpdateStmt extends DdlStmt {
         if (ConnectContext.get() != null && ConnectContext.get().getSessionVariable().isInDebugMode()) {
             throw new AnalysisException("Update is forbidden since current session is in debug mode."
                     + " Please check the following session variables: "
-                    + String.join(", ", SessionVariable.DEBUG_VARIABLES));
+                    + ConnectContext.get().getSessionVariable().printDebugModeVariables());
         }
         analyzeTargetTable(analyzer);
         analyzeSetExprs(analyzer);
@@ -119,12 +120,14 @@ public class UpdateStmt extends DdlStmt {
                 LimitElement.NO_LIMIT
         );
 
-        insertStmt = new InsertStmt(
+        insertStmt = new NativeInsertStmt(
                 new InsertTarget(tableName, null),
                 null,
                 cols,
                 new InsertSource(selectStmt),
-                null);
+                null,
+                isPartialUpdate, NativeInsertStmt.InsertType.UPDATE);
+        ((NativeInsertStmt) insertStmt).setIsFromDeleteOrUpdateStmt(true);
     }
 
     private void analyzeTargetTable(Analyzer analyzer) throws UserException {
@@ -136,7 +139,8 @@ public class UpdateStmt extends DdlStmt {
         Util.prohibitExternalCatalog(tableName.getCtl(), this.getClass().getSimpleName());
         // check load privilege, select privilege will check when analyze insert stmt
         if (!Env.getCurrentEnv().getAccessManager()
-                .checkTblPriv(ConnectContext.get(), tableName.getDb(), tableName.getTbl(), PrivPredicate.LOAD)) {
+                .checkTblPriv(ConnectContext.get(), tableName.getCtl(), tableName.getDb(), tableName.getTbl(),
+                        PrivPredicate.LOAD)) {
             ErrorReport.reportAnalysisException(ErrorCode.ERR_SPECIFIC_ACCESS_DENIED_ERROR, "LOAD");
         }
 
@@ -186,16 +190,47 @@ public class UpdateStmt extends DdlStmt {
         }
 
         // step3: generate select list and insert column name list in insert stmt
+        boolean isMow = ((OlapTable) targetTable).getEnableUniqueKeyMergeOnWrite();
+        int setExprCnt = 0;
         for (Column column : targetTable.getColumns()) {
-            Expr expr = new SlotRef(targetTableRef.getAliasAsName(), column.getName());
             for (BinaryPredicate setExpr : setExprs) {
                 Expr lhs = setExpr.getChild(0);
                 if (((SlotRef) lhs).getColumn().equals(column)) {
-                    expr = setExpr.getChild(1);
+                    setExprCnt++;
                 }
             }
-            selectListItems.add(new SelectListItem(expr, null));
-            cols.add(column.getName());
+        }
+        // table with sequence col cannot use partial update cause in MOW, we encode pk
+        // with seq column but we don't know which column is sequence in update
+        if (isMow && ((OlapTable) targetTable).getSequenceCol() == null
+                && setExprCnt <= targetTable.getColumns().size() * 3 / 10) {
+            isPartialUpdate = true;
+        }
+        Optional<Column> sequenceMapCol = Optional.empty();
+        OlapTable olapTable = (OlapTable) targetTable;
+        if (olapTable.hasSequenceCol() && olapTable.getSequenceMapCol() != null) {
+            sequenceMapCol = olapTable.getFullSchema().stream()
+                    .filter(col -> col.getName().equalsIgnoreCase(olapTable.getSequenceMapCol())).findFirst();
+        }
+        for (Column column : targetTable.getColumns()) {
+            Expr expr = new SlotRef(targetTableRef.getAliasAsName(), column.getName());
+            boolean existInExpr = false;
+            for (BinaryPredicate setExpr : setExprs) {
+                Expr lhs = setExpr.getChild(0);
+                Column exprColumn = ((SlotRef) lhs).getColumn();
+                // when updating the sequence map column, the real sequence column need to set with the same value.
+                boolean isSequenceMapColumn = sequenceMapCol.isPresent()
+                        && exprColumn.equals(sequenceMapCol.get());
+                if (exprColumn.equals(column) || (olapTable.hasSequenceCol()
+                        && column.equals(olapTable.getSequenceCol()) && isSequenceMapColumn)) {
+                    expr = setExpr.getChild(1);
+                    existInExpr = true;
+                }
+            }
+            if (column.isKey() || existInExpr || !isPartialUpdate) {
+                selectListItems.add(new SelectListItem(expr, null));
+                cols.add(column.getName());
+            }
         }
     }
 
@@ -215,5 +250,10 @@ public class UpdateStmt extends DdlStmt {
             sb.append("  ").append("WHERE ").append(whereExpr.toSql());
         }
         return sb.toString();
+    }
+
+    @Override
+    public StmtType stmtType() {
+        return StmtType.UPDATE;
     }
 }

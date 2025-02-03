@@ -15,10 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "udf/udf.h"
+#include <glog/logging.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <algorithm>
+#include <boost/iterator/iterator_facade.hpp>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "common/status.h"
+#include "runtime/runtime_state.h"
+#include "vec/aggregate_functions/aggregate_function.h"
+#include "vec/columns/column.h"
+#include "vec/columns/column_complex.h"
+#include "vec/columns/column_decimal.h"
+#include "vec/columns/column_nullable.h"
+#include "vec/columns/column_vector.h"
+#include "vec/columns/columns_number.h"
+#include "vec/common/assert_cast.h"
+#include "vec/core/block.h"
+#include "vec/core/column_numbers.h"
+#include "vec/core/column_with_type_and_name.h"
+#include "vec/core/columns_with_type_and_name.h"
+#include "vec/core/types.h"
+#include "vec/data_types/data_type.h"
+#include "vec/data_types/data_type_nullable.h"
 #include "vec/data_types/data_type_number.h"
+#include "vec/functions/function.h"
 #include "vec/functions/simple_function_factory.h"
 #include "vec/utils/template_helpers.hpp"
+
+namespace doris {
+class FunctionContext;
+} // namespace doris
 
 namespace doris::vectorized {
 class FunctionCoalesce : public IFunction {
@@ -30,8 +61,6 @@ public:
     static FunctionPtr create() { return std::make_shared<FunctionCoalesce>(); }
 
     String get_name() const override { return name; }
-
-    bool use_default_implementation_for_constants() const override { return true; }
 
     bool use_default_implementation_for_nulls() const override { return false; }
 
@@ -58,7 +87,7 @@ public:
     }
 
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        size_t result, size_t input_rows_count) override {
+                        uint32_t result, size_t input_rows_count) const override {
         DCHECK_GE(arguments.size(), 1);
         DataTypePtr result_type = block.get_by_position(result).type;
         ColumnNumbers filtered_args;
@@ -108,14 +137,16 @@ public:
         auto null_map = ColumnUInt8::create(
                 input_rows_count, 1); //if null_map_data==1, the current row should be null
         auto* __restrict null_map_data = null_map->get_data().data();
-        ColumnPtr argument_columns[argument_size]; //use to save nested_column if is nullable column
+        std::vector<ColumnPtr> argument_columns(
+                argument_size); //use to save nested_column if is nullable column
 
         for (size_t i = 0; i < argument_size; ++i) {
             block.get_by_position(filtered_args[i]).column =
                     block.get_by_position(filtered_args[i])
                             .column->convert_to_full_column_if_const();
             argument_columns[i] = block.get_by_position(filtered_args[i]).column;
-            if (auto* nullable = check_and_get_column<const ColumnNullable>(*argument_columns[i])) {
+            if (const auto* nullable =
+                        check_and_get_column<const ColumnNullable>(*argument_columns[i])) {
                 argument_columns[i] = nullable->get_nested_column_ptr();
             }
         }
@@ -127,12 +158,15 @@ public:
         for (size_t i = 0; i < argument_size && remaining_rows; ++i) {
             temporary_block.get_by_position(0).column =
                     block.get_by_position(filtered_args[i]).column;
-            func_is_not_null->execute(context, temporary_block, {0}, 1, input_rows_count);
+            RETURN_IF_ERROR(
+                    func_is_not_null->execute(context, temporary_block, {0}, 1, input_rows_count));
 
             auto res_column =
                     (*temporary_block.get_by_position(1).column->convert_to_full_column_if_const())
                             .mutate();
-            auto& res_map = assert_cast<ColumnVector<UInt8>*>(res_column.get())->get_data();
+            auto& res_map =
+                    assert_cast<ColumnVector<UInt8>*, TypeCheckOnRelease::DISABLE>(res_column.get())
+                            ->get_data();
             auto* __restrict res = res_map.data();
 
             // Here it's SIMD thought the compiler automatically
@@ -197,7 +231,7 @@ public:
     template <typename ColumnType>
     Status insert_result_data(MutableColumnPtr& result_column, ColumnPtr& argument_column,
                               const UInt8* __restrict null_map_data, UInt8* __restrict filled_flag,
-                              const size_t input_rows_count) {
+                              const size_t input_rows_count) const {
         auto* __restrict result_raw_data =
                 reinterpret_cast<ColumnType*>(result_column.get())->get_data().data();
         auto* __restrict column_raw_data =
@@ -216,7 +250,8 @@ public:
 
     Status insert_result_data_bitmap(MutableColumnPtr& result_column, ColumnPtr& argument_column,
                                      const UInt8* __restrict null_map_data,
-                                     UInt8* __restrict filled_flag, const size_t input_rows_count) {
+                                     UInt8* __restrict filled_flag,
+                                     const size_t input_rows_count) const {
         auto* __restrict result_raw_data =
                 reinterpret_cast<ColumnBitmap*>(result_column.get())->get_data().data();
         auto* __restrict column_raw_data =
@@ -239,7 +274,7 @@ public:
                                               ColumnPtr& argument_column,
                                               UInt8* __restrict null_map_data,
                                               UInt8* __restrict filled_flag,
-                                              const size_t input_rows_count) {
+                                              const size_t input_rows_count) const {
         WhichDataType which(data_type->is_nullable()
                                     ? reinterpret_cast<const DataTypeNullable*>(data_type.get())
                                               ->get_nested_type()

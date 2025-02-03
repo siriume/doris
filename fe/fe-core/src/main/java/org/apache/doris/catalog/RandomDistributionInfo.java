@@ -21,7 +21,6 @@ import org.apache.doris.analysis.DistributionDesc;
 import org.apache.doris.analysis.RandomDistributionDesc;
 
 import java.io.DataInput;
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Objects;
 
@@ -53,22 +52,17 @@ public class RandomDistributionInfo extends DistributionInfo {
     }
 
     @Override
-    public String toSql() {
+    public String toSql(boolean forSync) {
         StringBuilder builder = new StringBuilder();
-        if (autoBucket) {
-            builder.append("DISTRIBUTED BY RANDOM() BUCKETS AUTO");
+        if (autoBucket && !forSync) {
+            builder.append("DISTRIBUTED BY RANDOM BUCKETS AUTO");
         } else {
-            builder.append("DISTRIBUTED BY RANDOM() BUCKETS ").append(bucketNum);
+            builder.append("DISTRIBUTED BY RANDOM BUCKETS ").append(bucketNum);
         }
         return builder.toString();
     }
 
-    @Override
-    public void write(DataOutput out) throws IOException {
-        super.write(out);
-        out.writeInt(bucketNum);
-    }
-
+    @Deprecated
     @Override
     public void readFields(DataInput in) throws IOException {
         super.readFields(in);

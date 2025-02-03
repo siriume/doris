@@ -22,7 +22,6 @@ import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.functions.ExplicitlyCastableSignature;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
-import org.apache.doris.nereids.trees.expressions.literal.NullLiteral;
 import org.apache.doris.nereids.trees.expressions.shape.TernaryExpression;
 import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
 import org.apache.doris.nereids.types.BigIntType;
@@ -50,19 +49,11 @@ public class Lead extends WindowFunction implements TernaryExpression, Explicitl
 
     private static final List<FunctionSignature> SIGNATURES;
 
-    public Lead(Expression child) {
-        this(child, Literal.of(1), Literal.of(null));
-    }
-
-    public Lead(Expression child, Expression offset) {
-        this(child, offset, Literal.of(null));
-    }
-
     public Lead(Expression child, Expression offset, Expression defaultValue) {
         super("lead", child, offset, defaultValue);
     }
 
-    public Lead(List<Expression> children) {
+    private Lead(List<Expression> children) {
         super("lead", children);
     }
 
@@ -82,7 +73,7 @@ public class Lead extends WindowFunction implements TernaryExpression, Explicitl
 
     @Override
     public boolean nullable() {
-        if (children.size() == 3 && child(2) instanceof NullLiteral) {
+        if (children.size() == 3 && child(2).nullable()) {
             return true;
         }
         return child(0).nullable();
@@ -99,9 +90,18 @@ public class Lead extends WindowFunction implements TernaryExpression, Explicitl
             return;
         }
         if (children().size() >= 2) {
-            DataType offsetType = getOffset().getDataType();
-            if (!offsetType.isNumericType()) {
-                throw new AnalysisException("The offset of LEAD must be a number:" + this.toSql());
+            checkValidParams(getOffset(), true);
+            if (getOffset() instanceof Literal) {
+                if (((Literal) getOffset()).getDouble() < 0) {
+                    throw new AnalysisException(
+                            "The offset parameter of LEAD must be a constant positive integer: " + this.toSql());
+                }
+            } else {
+                throw new AnalysisException(
+                    "The offset parameter of LAG must be a constant positive integer: " + this.toSql());
+            }
+            if (children().size() >= 3) {
+                checkValidParams(getDefaultValue(), false);
             }
         }
     }

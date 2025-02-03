@@ -28,7 +28,7 @@ import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.ShowResultSetMetaData;
 
-public class ShowBrokerStmt extends ShowStmt {
+public class ShowBrokerStmt extends ShowStmt implements NotFallbackInParser {
     public ShowBrokerStmt() {
     }
 
@@ -45,10 +45,6 @@ public class ShowBrokerStmt extends ShowStmt {
     public ShowResultSetMetaData getMetaData() {
         ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
         for (String title : BrokerMgr.BROKER_PROC_NODE_TITLE_NAMES) {
-            if (title.equals(BrokerMgr.BROKER_PROC_NODE_TITLE_NAMES.get(BrokerMgr.HOSTNAME_INDEX))) {
-                // SHOW BROKER does not show hostname
-                continue;
-            }
             builder.addColumn(new Column(title, ScalarType.createVarchar(30)));
         }
         return builder.build();

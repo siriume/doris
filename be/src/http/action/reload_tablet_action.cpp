@@ -17,17 +17,18 @@
 
 #include "http/action/reload_tablet_action.h"
 
+#include <gen_cpp/AgentService_types.h>
+
+#include <boost/lexical_cast/bad_lexical_cast.hpp>
 #include <sstream>
 #include <string>
 
 #include "boost/lexical_cast.hpp"
 #include "common/logging.h"
+#include "common/status.h"
 #include "http/http_channel.h"
-#include "http/http_headers.h"
 #include "http/http_request.h"
-#include "http/http_response.h"
 #include "http/http_status.h"
-#include "olap/olap_define.h"
 #include "olap/storage_engine.h"
 #include "runtime/exec_env.h"
 
@@ -37,7 +38,9 @@ const std::string PATH = "path";
 const std::string TABLET_ID = "tablet_id";
 const std::string SCHEMA_HASH = "schema_hash";
 
-ReloadTabletAction::ReloadTabletAction(ExecEnv* exec_env) : _exec_env(exec_env) {}
+ReloadTabletAction::ReloadTabletAction(ExecEnv* exec_env, StorageEngine& engine,
+                                       TPrivilegeHier::type hier, TPrivilegeType::type type)
+        : HttpHandlerWithAuth(exec_env, hier, type), _engine(engine) {}
 
 void ReloadTabletAction::handle(HttpRequest* req) {
     LOG(INFO) << "accept one request " << req->debug_string();
@@ -91,7 +94,7 @@ void ReloadTabletAction::reload(const std::string& path, int64_t tablet_id, int3
     clone_req.__set_schema_hash(schema_hash);
 
     Status res = Status::OK();
-    res = _exec_env->storage_engine()->load_header(path, clone_req);
+    res = _engine.load_header(path, clone_req);
     if (!res.ok()) {
         LOG(WARNING) << "load header failed. status: " << res << ", signature: " << tablet_id;
         std::string error_msg = std::string("load header failed");

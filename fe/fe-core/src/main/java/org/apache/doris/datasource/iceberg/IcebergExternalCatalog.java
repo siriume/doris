@@ -17,99 +17,67 @@
 
 package org.apache.doris.datasource.iceberg;
 
-import org.apache.doris.catalog.Env;
-import org.apache.doris.catalog.external.ExternalDatabase;
-import org.apache.doris.catalog.external.IcebergExternalDatabase;
-import org.apache.doris.common.AnalysisException;
-import org.apache.doris.common.FeNameFormat;
-import org.apache.doris.common.util.Util;
+import org.apache.doris.common.ThreadPoolManager;
+import org.apache.doris.common.security.authentication.AuthenticationConfig;
+import org.apache.doris.common.security.authentication.HadoopAuthenticator;
+import org.apache.doris.common.security.authentication.PreExecutionAuthenticator;
 import org.apache.doris.datasource.ExternalCatalog;
 import org.apache.doris.datasource.InitCatalogLog;
 import org.apache.doris.datasource.SessionContext;
+import org.apache.doris.datasource.operations.ExternalMetadataOperations;
+import org.apache.doris.datasource.property.PropertyConverter;
+import org.apache.doris.transaction.TransactionManagerFactory;
 
-import com.google.common.collect.Maps;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.HdfsConfiguration;
+import org.apache.hadoop.fs.s3a.Constants;
 import org.apache.iceberg.catalog.Catalog;
-import org.apache.iceberg.catalog.Namespace;
-import org.apache.iceberg.catalog.SupportsNamespaces;
-import org.apache.iceberg.catalog.TableIdentifier;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 public abstract class IcebergExternalCatalog extends ExternalCatalog {
 
-    private static final Logger LOG = LogManager.getLogger(IcebergExternalCatalog.class);
     public static final String ICEBERG_CATALOG_TYPE = "iceberg.catalog.type";
     public static final String ICEBERG_REST = "rest";
     public static final String ICEBERG_HMS = "hms";
+    public static final String ICEBERG_HADOOP = "hadoop";
     public static final String ICEBERG_GLUE = "glue";
     public static final String ICEBERG_DLF = "dlf";
+    public static final String EXTERNAL_CATALOG_NAME = "external_catalog.name";
     protected String icebergCatalogType;
     protected Catalog catalog;
-    protected SupportsNamespaces nsCatalog;
+    private static final int ICEBERG_CATALOG_EXECUTOR_THREAD_NUM = 16;
 
-    public IcebergExternalCatalog(long catalogId, String name) {
-        super(catalogId, name);
+    public IcebergExternalCatalog(long catalogId, String name, String comment) {
+        super(catalogId, name, InitCatalogLog.Type.ICEBERG, comment);
     }
+
+    // Create catalog based on catalog type
+    protected abstract void initCatalog();
 
     @Override
-    protected void init() {
-        nsCatalog = (SupportsNamespaces) catalog;
-        Map<String, Long> tmpDbNameToId = Maps.newConcurrentMap();
-        Map<Long, ExternalDatabase> tmpIdToDb = Maps.newConcurrentMap();
-        InitCatalogLog initCatalogLog = new InitCatalogLog();
-        initCatalogLog.setCatalogId(id);
-        initCatalogLog.setType(InitCatalogLog.Type.ICEBERG);
-        List<String> allDatabaseNames = listDatabaseNames();
-        Map<String, Boolean> specifiedDatabaseMap = getSpecifiedDatabaseMap();
-        for (String dbName : allDatabaseNames) {
-            if (!specifiedDatabaseMap.isEmpty() && specifiedDatabaseMap.get(dbName) == null) {
-                continue;
-            }
-            long dbId;
-            if (dbNameToId != null && dbNameToId.containsKey(dbName)) {
-                dbId = dbNameToId.get(dbName);
-                tmpDbNameToId.put(dbName, dbId);
-                ExternalDatabase db = idToDb.get(dbId);
-                db.setUnInitialized(invalidCacheInInit);
-                tmpIdToDb.put(dbId, db);
-                initCatalogLog.addRefreshDb(dbId);
-            } else {
-                dbId = Env.getCurrentEnv().getNextId();
-                tmpDbNameToId.put(dbName, dbId);
-                IcebergExternalDatabase db = new IcebergExternalDatabase(this, dbId, dbName);
-                tmpIdToDb.put(dbId, db);
-                initCatalogLog.addCreateDb(dbId, dbName);
-            }
-        }
-        dbNameToId = tmpDbNameToId;
-        idToDb = tmpIdToDb;
-        Env.getCurrentEnv().getEditLog().logInitCatalog(initCatalogLog);
-    }
-
-    protected Configuration getConfiguration() {
-        Configuration conf = new HdfsConfiguration();
-        Map<String, String> catalogProperties = catalogProperty.getHadoopProperties();
-        for (Map.Entry<String, String> entry : catalogProperties.entrySet()) {
-            conf.set(entry.getKey(), entry.getValue());
-        }
-        return conf;
+    protected void initLocalObjectsImpl() {
+        preExecutionAuthenticator = new PreExecutionAuthenticator();
+        // TODO If the storage environment does not support Kerberos (such as s3),
+        //      there is no need to generate a simple authentication information anymore.
+        AuthenticationConfig config = AuthenticationConfig.getKerberosConfig(getConfiguration());
+        HadoopAuthenticator authenticator = HadoopAuthenticator.getHadoopAuthenticator(config);
+        preExecutionAuthenticator.setHadoopAuthenticator(authenticator);
+        initCatalog();
+        IcebergMetadataOps ops = ExternalMetadataOperations.newIcebergMetadataOps(this, catalog);
+        transactionManager = TransactionManagerFactory.createIcebergTransactionManager(ops);
+        threadPoolWithPreAuth = ThreadPoolManager.newDaemonFixedThreadPoolWithPreAuth(
+            ICEBERG_CATALOG_EXECUTOR_THREAD_NUM,
+            Integer.MAX_VALUE,
+            String.format("iceberg_catalog_%s_executor_pool", name),
+            true,
+            preExecutionAuthenticator);
+        metadataOps = ops;
     }
 
     public Catalog getCatalog() {
         makeSureInitialized();
-        return catalog;
-    }
-
-    public SupportsNamespaces getNsCatalog() {
-        makeSureInitialized();
-        return nsCatalog;
+        return ((IcebergMetadataOps) metadataOps).getCatalog();
     }
 
     public String getIcebergCatalogType() {
@@ -117,42 +85,20 @@ public abstract class IcebergExternalCatalog extends ExternalCatalog {
         return icebergCatalogType;
     }
 
-    protected List<String> listDatabaseNames() {
-        return nsCatalog.listNamespaces().stream()
-            .map(e -> {
-                String dbName = e.toString();
-                try {
-                    FeNameFormat.checkDbName(dbName);
-                } catch (AnalysisException ex) {
-                    Util.logAndThrowRuntimeException(LOG,
-                            String.format("Not a supported namespace name format: %s", dbName), ex);
-                }
-                return dbName;
-            })
-            .collect(Collectors.toList());
-    }
-
-    @Override
-    public List<String> listDatabaseNames(SessionContext ctx) {
-        makeSureInitialized();
-        return new ArrayList<>(dbNameToId.keySet());
-    }
-
     @Override
     public boolean tableExist(SessionContext ctx, String dbName, String tblName) {
         makeSureInitialized();
-        return catalog.tableExists(TableIdentifier.of(dbName, tblName));
+        return metadataOps.tableExist(dbName, tblName);
     }
 
     @Override
     public List<String> listTableNames(SessionContext ctx, String dbName) {
         makeSureInitialized();
-        List<TableIdentifier> tableIdentifiers = catalog.listTables(Namespace.of(dbName));
-        return tableIdentifiers.stream().map(TableIdentifier::name).collect(Collectors.toList());
+        return metadataOps.listTableNames(dbName);
     }
 
-    public org.apache.iceberg.Table getIcebergTable(String dbName, String tblName) {
-        makeSureInitialized();
-        return catalog.loadTable(TableIdentifier.of(dbName, tblName));
+    protected void initS3Param(Configuration conf) {
+        Map<String, String> properties = catalogProperty.getHadoopProperties();
+        conf.set(Constants.AWS_CREDENTIALS_PROVIDER, PropertyConverter.getAWSCredentialsProviders(properties));
     }
 }

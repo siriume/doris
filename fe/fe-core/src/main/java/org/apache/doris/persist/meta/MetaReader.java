@@ -18,6 +18,7 @@
 package org.apache.doris.persist.meta;
 
 import org.apache.doris.catalog.Env;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 
 import com.google.common.base.Preconditions;
@@ -74,6 +75,8 @@ public class MetaReader {
         MetaFooter metaFooter = MetaFooter.read(imageFile);
 
         long checksum = 0;
+        long footerIndex = imageFile.length()
+                - metaFooter.length - MetaFooter.FOOTER_LENGTH_SIZE - MetaMagicNumber.MAGIC_STR.length();
         try (DataInputStream dis = new DataInputStream(new BufferedInputStream(new FileInputStream(imageFile)))) {
             // 1. Skip image file header
             IOUtils.skipFully(dis, metaHeader.getEnd());
@@ -87,10 +90,20 @@ public class MetaReader {
                     // skip meta header, which has been read before.
                     continue;
                 }
-                // Should skip some bytes because ignore some meta, such as load job
-                if (metaIndex.name.equals("loadJob")
-                        || metaIndex.name.equals("cooldownJob")) {
-                    LOG.info("Skip {} module", metaIndex.name);
+                if (i < metaFooter.metaIndices.size() - 1
+                        && metaIndex.offset == metaFooter.metaIndices.get(i + 1).offset) {
+                    // skip empty meta
+                    LOG.info("Skip {} module since empty meta length.", metaIndex.name);
+                    continue;
+                } else if (metaIndex.offset == footerIndex) {
+                    // skip last empty meta
+                    LOG.info("Skip {} module since empty meta length in the end.", metaIndex.name);
+                    continue;
+                }
+                // skip deprecated modules
+                if (PersistMetaModules.DEPRECATED_MODULE_NAMES.contains(metaIndex.name)) {
+                    LOG.warn("meta modules {} is deprecated, ignore and skip it", metaIndex.name);
+                    // If this is the last module, nothing need to do.
                     if (i < metaFooter.metaIndices.size() - 1) {
                         IOUtils.skipFully(dis, metaFooter.metaIndices.get(i + 1).offset - metaIndex.offset);
                     }
@@ -98,8 +111,17 @@ public class MetaReader {
                 }
                 MetaPersistMethod persistMethod = PersistMetaModules.MODULES_MAP.get(metaIndex.name);
                 if (persistMethod == null) {
-                    throw new IOException("Unknown meta module: " + metaIndex.name + ". Known modules: "
-                            + PersistMetaModules.MODULE_NAMES);
+                    if (Config.ignore_unknown_metadata_module) {
+                        LOG.warn("meta modules {} is unknown, ignore and skip it", metaIndex.name);
+                        // If this is the last module, nothing need to do.
+                        if (i < metaFooter.metaIndices.size() - 1) {
+                            IOUtils.skipFully(dis, metaFooter.metaIndices.get(i + 1).offset - metaIndex.offset);
+                        }
+                        continue;
+                    } else {
+                        throw new IOException("Unknown meta module: " + metaIndex.name + ". Known modules: "
+                                + PersistMetaModules.MODULE_NAMES);
+                    }
                 }
                 checksum = (long) persistMethod.readMethod.invoke(env, dis, checksum);
             }

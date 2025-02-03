@@ -17,18 +17,30 @@
 
 #include "runtime/load_path_mgr.h"
 
+// IWYU pragma: no_include <bthread/errno.h>
+#include <errno.h> // IWYU pragma: keep
+#include <gen_cpp/Types_types.h>
+#include <glog/logging.h>
+#include <string.h>
 #include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 
+#include <algorithm>
 #include <boost/algorithm/string/join.hpp>
+
+#include "common/compiler_util.h" // IWYU pragma: keep
+// IWYU pragma: no_include <bits/chrono.h>
+#include <chrono> // IWYU pragma: keep
+#include <memory>
+#include <ostream>
 #include <string>
 
-#include "gen_cpp/Types_types.h"
+#include "common/config.h"
+#include "io/fs/file_system.h"
 #include "io/fs/local_file_system.h"
 #include "olap/olap_define.h"
-#include "olap/storage_engine.h"
+#include "olap/options.h"
 #include "runtime/exec_env.h"
+#include "util/thread.h"
 
 namespace doris {
 using namespace ErrorCode;
@@ -43,7 +55,7 @@ LoadPathMgr::LoadPathMgr(ExecEnv* exec_env)
           _error_path_next_shard(0),
           _stop_background_threads_latch(1) {}
 
-LoadPathMgr::~LoadPathMgr() {
+void LoadPathMgr::stop() {
     _stop_background_threads_latch.count_down();
     if (_clean_thread) {
         _clean_thread->join();
@@ -52,9 +64,6 @@ LoadPathMgr::~LoadPathMgr() {
 
 Status LoadPathMgr::init() {
     _path_vec.clear();
-    for (auto& path : _exec_env->store_paths()) {
-        _path_vec.push_back(path.path + "/" + MINI_PREFIX);
-    }
     LOG(INFO) << "Load path configured to [" << boost::join(_path_vec, ",") << "]";
 
     // error log is saved in first root path
@@ -78,13 +87,15 @@ Status LoadPathMgr::init() {
 
 Status LoadPathMgr::allocate_dir(const std::string& db, const std::string& label,
                                  std::string* prefix) {
-    if (_path_vec.empty()) {
-        return Status::InternalError("No load path configured.");
-    }
+    Status status = _init_once.call([this] {
+        for (auto& store_path : _exec_env->store_paths()) {
+            _path_vec.push_back(store_path.path + "/" + MINI_PREFIX);
+        }
+        return Status::OK();
+    });
     std::string path;
     auto size = _path_vec.size();
     auto retry = size;
-    Status status = Status::OK();
     while (retry--) {
         {
             // add SHARD_PREFIX for compatible purpose
@@ -159,11 +170,11 @@ void LoadPathMgr::process_path(time_t now, const std::string& path, int64_t rese
         return;
     }
     LOG(INFO) << "Going to remove path. path=" << path;
-    Status status = io::global_local_filesystem()->delete_directory(path);
+    Status status = io::global_local_filesystem()->delete_directory_or_file(path);
     if (status.ok()) {
         LOG(INFO) << "Remove path success. path=" << path;
     } else {
-        LOG(WARNING) << "Remove path failed. path=" << path;
+        LOG(WARNING) << "Remove path failed. path=" << path << ", error=" << status;
     }
 }
 

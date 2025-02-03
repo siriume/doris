@@ -17,11 +17,19 @@
 
 #pragma once
 
+#include <gen_cpp/Types_types.h>
+#include <gen_cpp/types.pb.h>
+#include <stdint.h>
+
+#include <boost/random/mersenne_twister.hpp>
+#include <boost/uuid/random_generator.hpp>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
+#include <cstring>
 #include <ostream>
 #include <string>
+#include <string_view>
 
-#include "gen_cpp/Types_types.h" // for TUniqueId
-#include "gen_cpp/types.pb.h"    // for PUniqueId
 #include "util/uuid_generator.h"
 
 namespace doris {
@@ -37,14 +45,14 @@ void to_hex(T val, char* buf) {
 }
 
 template <typename T>
-void from_hex(T* ret, const std::string& buf) {
+void from_hex(T* ret, std::string_view buf) {
     T val = 0;
-    for (int i = 0; i < buf.length(); ++i) {
+    for (char i : buf) {
         int buf_val = 0;
-        if (buf.c_str()[i] >= '0' && buf.c_str()[i] <= '9') {
-            buf_val = buf.c_str()[i] - '0';
+        if (i >= '0' && i <= '9') {
+            buf_val = i - '0';
         } else {
-            buf_val = buf.c_str()[i] - 'a' + 10;
+            buf_val = i - 'a' + 10;
         }
         val <<= 4;
         val = val | buf_val;

@@ -17,11 +17,15 @@
 
 #include "olap/key_coder.h"
 
-#include <gtest/gtest.h>
+#include <gtest/gtest-message.h>
+#include <gtest/gtest-test-part.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <limits>
 
+#include "gtest/gtest_pred_impl.h"
+#include "olap/uint24.h"
 #include "util/debug_util.h"
 
 namespace doris {
@@ -53,7 +57,8 @@ void test_integer_encode() {
         {
             Slice slice(buf);
             CppType check_val;
-            key_coder->decode_ascending(&slice, sizeof(CppType), (uint8_t*)&check_val);
+            static_cast<void>(
+                    key_coder->decode_ascending(&slice, sizeof(CppType), (uint8_t*)&check_val));
             EXPECT_EQ(val, check_val);
         }
     }
@@ -72,7 +77,8 @@ void test_integer_encode() {
         {
             Slice slice(buf);
             CppType check_val;
-            key_coder->decode_ascending(&slice, sizeof(CppType), (uint8_t*)&check_val);
+            static_cast<void>(
+                    key_coder->decode_ascending(&slice, sizeof(CppType), (uint8_t*)&check_val));
             EXPECT_EQ(val, check_val);
         }
     }
@@ -98,20 +104,20 @@ void test_integer_encode() {
 }
 
 TEST_F(KeyCoderTest, test_int) {
-    test_integer_encode<OLAP_FIELD_TYPE_TINYINT>();
-    test_integer_encode<OLAP_FIELD_TYPE_SMALLINT>();
-    test_integer_encode<OLAP_FIELD_TYPE_INT>();
-    test_integer_encode<OLAP_FIELD_TYPE_UNSIGNED_INT>();
-    test_integer_encode<OLAP_FIELD_TYPE_BIGINT>();
-    test_integer_encode<OLAP_FIELD_TYPE_UNSIGNED_BIGINT>();
-    test_integer_encode<OLAP_FIELD_TYPE_LARGEINT>();
+    test_integer_encode<FieldType::OLAP_FIELD_TYPE_TINYINT>();
+    test_integer_encode<FieldType::OLAP_FIELD_TYPE_SMALLINT>();
+    test_integer_encode<FieldType::OLAP_FIELD_TYPE_INT>();
+    test_integer_encode<FieldType::OLAP_FIELD_TYPE_UNSIGNED_INT>();
+    test_integer_encode<FieldType::OLAP_FIELD_TYPE_BIGINT>();
+    test_integer_encode<FieldType::OLAP_FIELD_TYPE_UNSIGNED_BIGINT>();
+    test_integer_encode<FieldType::OLAP_FIELD_TYPE_LARGEINT>();
 
-    test_integer_encode<OLAP_FIELD_TYPE_DATETIME>();
+    test_integer_encode<FieldType::OLAP_FIELD_TYPE_DATETIME>();
 }
 
 TEST_F(KeyCoderTest, test_date) {
     using CppType = uint24_t;
-    auto key_coder = get_key_coder(OLAP_FIELD_TYPE_DATE);
+    auto key_coder = get_key_coder(FieldType::OLAP_FIELD_TYPE_DATE);
 
     {
         std::string buf;
@@ -128,7 +134,8 @@ TEST_F(KeyCoderTest, test_date) {
         {
             Slice slice(buf);
             CppType check_val;
-            key_coder->decode_ascending(&slice, sizeof(CppType), (uint8_t*)&check_val);
+            static_cast<void>(
+                    key_coder->decode_ascending(&slice, sizeof(CppType), (uint8_t*)&check_val));
             EXPECT_EQ(val, check_val);
         }
     }
@@ -144,7 +151,8 @@ TEST_F(KeyCoderTest, test_date) {
         {
             Slice slice(buf);
             CppType check_val;
-            key_coder->decode_ascending(&slice, sizeof(CppType), (uint8_t*)&check_val);
+            static_cast<void>(
+                    key_coder->decode_ascending(&slice, sizeof(CppType), (uint8_t*)&check_val));
             EXPECT_EQ(val, check_val);
         }
     }
@@ -170,7 +178,7 @@ TEST_F(KeyCoderTest, test_date) {
 }
 
 TEST_F(KeyCoderTest, test_decimal) {
-    auto key_coder = get_key_coder(OLAP_FIELD_TYPE_DECIMAL);
+    auto key_coder = get_key_coder(FieldType::OLAP_FIELD_TYPE_DECIMAL);
 
     decimal12_t val1 = {1, 100000000};
     std::string buf1;
@@ -179,7 +187,8 @@ TEST_F(KeyCoderTest, test_decimal) {
 
     decimal12_t check_val;
     Slice slice1(buf1);
-    key_coder->decode_ascending(&slice1, sizeof(decimal12_t), (uint8_t*)&check_val);
+    static_cast<void>(
+            key_coder->decode_ascending(&slice1, sizeof(decimal12_t), (uint8_t*)&check_val));
     EXPECT_EQ(check_val, val1);
 
     {
@@ -214,7 +223,7 @@ TEST_F(KeyCoderTest, test_decimal) {
 }
 
 TEST_F(KeyCoderTest, test_char) {
-    auto key_coder = get_key_coder(OLAP_FIELD_TYPE_CHAR);
+    auto key_coder = get_key_coder(FieldType::OLAP_FIELD_TYPE_CHAR);
 
     char buf[] = "1234567890";
     Slice slice(buf, 10);
@@ -249,7 +258,7 @@ TEST_F(KeyCoderTest, test_char) {
 }
 
 TEST_F(KeyCoderTest, test_varchar) {
-    auto key_coder = get_key_coder(OLAP_FIELD_TYPE_VARCHAR);
+    auto key_coder = get_key_coder(FieldType::OLAP_FIELD_TYPE_VARCHAR);
 
     char buf[] = "1234567890";
     Slice slice(buf, 10);

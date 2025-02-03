@@ -20,32 +20,20 @@
 
 #pragma once
 
-#include <string.h>
-
 #include <cstdint>
-#include <functional>
-#include <iostream>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "runtime/types.h"
+#include "util/runtime_profile.h"
+#include "vec/common/arena.h"
 
 namespace doris {
 
 struct ColumnPtrWrapper;
 struct StringRef;
-class BitmapValue;
-class DecimalV2Value;
-class CollectionValue;
-struct TypeDescriptor;
-
 class RuntimeState;
-// All input and output values will be one of the structs below. The struct is a simple
-// object containing a boolean to store if the value is nullptr and the value itself. The
-// value is unspecified if the nullptr boolean is set.
-struct AnyVal;
-struct StringRef;
-struct DateTimeVal;
 
 // The FunctionContext is passed to every UDF/UDA and is the interface for the UDF to the
 // rest of the system. It contains APIs to examine the system state, report errors
@@ -87,13 +75,33 @@ public:
 
     RuntimeState* state() { return _state; }
 
-    std::string& string_result() { return _string_result; }
-
     bool check_overflow_for_decimal() const { return _check_overflow_for_decimal; }
 
     bool set_check_overflow_for_decimal(bool check_overflow_for_decimal) {
         return _check_overflow_for_decimal = check_overflow_for_decimal;
     }
+
+    void set_string_as_jsonb_string(bool string_as_jsonb_string) {
+        _string_as_jsonb_string = string_as_jsonb_string;
+    }
+
+    void set_jsonb_string_as_string(bool jsonb_string_as_string) {
+        _jsonb_string_as_string = jsonb_string_as_string;
+    }
+
+    void set_udf_execute_timer(RuntimeProfile::Counter* udf_execute_timer) {
+        _udf_execute_timer = udf_execute_timer;
+    }
+
+    RuntimeProfile::Counter* get_udf_execute_timer() { return _udf_execute_timer; }
+
+    // Cast flag, when enable string_as_jsonb_string, string casting to jsonb will not parse string
+    // instead just insert a string literal
+    bool string_as_jsonb_string() const { return _string_as_jsonb_string; }
+
+    // Cast flag, when enable jsonb_string_as_string, jsonb string casting to string will not parse string
+    // instead just insert a string literal
+    bool jsonb_string_as_string() const { return _jsonb_string_as_string; }
 
     // Sets an error for this UDF. If this is called, this will trigger the
     // query to fail.
@@ -143,6 +151,8 @@ public:
 
     ~FunctionContext() = default;
 
+    vectorized::Arena& get_arena() { return arena; }
+
 private:
     FunctionContext() = default;
 
@@ -153,7 +163,7 @@ private:
 
     // We use the query's runtime state to report errors and warnings. nullptr for test
     // contexts.
-    RuntimeState* _state;
+    RuntimeState* _state = nullptr;
 
     // Empty if there's no error
     std::string _error_msg;
@@ -173,9 +183,16 @@ private:
 
     std::vector<std::shared_ptr<doris::ColumnPtrWrapper>> _constant_cols;
 
+    //udf execute timer
+    RuntimeProfile::Counter* _udf_execute_timer = nullptr;
     bool _check_overflow_for_decimal = false;
 
+    bool _string_as_jsonb_string = false;
+    bool _jsonb_string_as_string = false;
+
     std::string _string_result;
+
+    vectorized::Arena arena;
 };
 
 using doris::FunctionContext;

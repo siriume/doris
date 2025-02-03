@@ -15,22 +15,49 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <algorithm>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "common/compiler_util.h" // IWYU pragma: keep
+#include "common/status.h"
+#include "runtime/thread_context.h"
+#include "vec/aggregate_functions/aggregate_function.h"
 #include "vec/columns/column_array.h"
-#include "vec/columns/column_const.h"
-#include "vec/data_types/data_type_array.h"
-#include "vec/data_types/data_type_number.h"
+#include "vec/columns/column_nullable.h"
+#include "vec/columns/column_vector.h"
+#include "vec/columns/columns_number.h"
+#include "vec/common/assert_cast.h"
+#include "vec/core/column_numbers.h"
+#include "vec/core/types.h"
+#include "vec/data_types/data_type_array.h" // IWYU pragma: keep
+#include "vec/data_types/data_type_nullable.h"
 #include "vec/functions/function.h"
-#include "vec/functions/function_helpers.h"
 #include "vec/functions/simple_function_factory.h"
 
-namespace doris::vectorized {
+namespace doris {
+class FunctionContext;
 
-/* array_with_constant(num, T) - return array of constants with length num.
+namespace vectorized {
+class Block;
+} // namespace vectorized
+} // namespace doris
+
+namespace doris::vectorized {
+#include "common/compile_check_begin.h"
+
+/* array_with_constant(num, T) / array_repeat(T, num)  - return array of constants with length num.
  * array_with_constant(2, 'xxx') = ['xxx', 'xxx']
+ * array_repeat('xxx', 2) = ['xxx', 'xxx']
  */
+template <typename FunctionType>
 class FunctionArrayWithConstant : public IFunction {
 public:
-    static constexpr auto name = "array_with_constant";
+    static constexpr auto name = FunctionType::name;
     static FunctionPtr create() { return std::make_shared<FunctionArrayWithConstant>(); }
 
     /// Get function name.
@@ -44,32 +71,40 @@ public:
     bool use_default_implementation_for_nulls() const override { return false; }
 
     DataTypePtr get_return_type_impl(const DataTypes& arguments) const override {
-        return std::make_shared<DataTypeArray>(make_nullable(arguments[1]));
+        return std::make_shared<DataTypeArray>(
+                make_nullable(arguments[FunctionType::param_val_idx]));
     }
 
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        size_t result, size_t input_rows_count) override {
-        auto num = block.get_by_position(arguments[0]).column->convert_to_full_column_if_const();
-        auto value = block.get_by_position(arguments[1]).column->convert_to_full_column_if_const();
+                        uint32_t result, size_t input_rows_count) const override {
+        auto num = block.get_by_position(arguments[FunctionType::param_num_idx])
+                           .column->convert_to_full_column_if_const();
+        num = num->is_nullable()
+                      ? assert_cast<const ColumnNullable*>(num.get())->get_nested_column_ptr()
+                      : num;
+        auto value = block.get_by_position(arguments[FunctionType::param_val_idx])
+                             .column->convert_to_full_column_if_const();
         auto offsets_col = ColumnVector<ColumnArray::Offset64>::create();
         ColumnArray::Offsets64& offsets = offsets_col->get_data();
         offsets.reserve(input_rows_count);
         ColumnArray::Offset64 offset = 0;
         std::vector<uint32_t> array_sizes;
         array_sizes.reserve(input_rows_count);
-        for (size_t i = 0; i < input_rows_count; ++i) {
+        // The array size will never gt int max value.
+        for (int i = 0; i < input_rows_count; ++i) {
             auto array_size = num->get_int(i);
-            if (UNLIKELY(array_size < 0)) {
-                return Status::RuntimeError("Array size can not be negative in function:" +
-                                            get_name());
+            if (UNLIKELY(array_size < 0) || UNLIKELY(array_size > max_array_size_as_field)) {
+                return Status::InvalidArgument("Array size should in range(0, {}) in function: {}",
+                                               max_array_size_as_field, get_name());
             }
             offset += array_size;
             offsets.push_back(offset);
-            array_sizes.push_back(array_size);
+            array_sizes.resize(array_sizes.size() + array_size, i);
         }
         auto clone = value->clone_empty();
         clone->reserve(input_rows_count);
-        value->replicate(array_sizes.data(), offset, *clone->assume_mutable().get());
+        clone->assume_mutable()->insert_indices_from(*value, array_sizes.data(),
+                                                     array_sizes.data() + offset);
         if (!clone->is_nullable()) {
             clone = ColumnNullable::create(std::move(clone), ColumnUInt8::create(clone->size(), 0));
         }
@@ -79,8 +114,25 @@ public:
     }
 };
 
-void register_function_array_with_constant(SimpleFunctionFactory& factory) {
-    factory.register_function<FunctionArrayWithConstant>();
-}
+struct NameArrayWithConstant {
+    static constexpr auto name = "array_with_constant";
 
+    static constexpr auto param_num_idx = 0;
+
+    static constexpr auto param_val_idx = 1;
+};
+
+struct NameArrayRepeat {
+    static constexpr auto name = "array_repeat";
+
+    static constexpr auto param_num_idx = 1;
+
+    static constexpr auto param_val_idx = 0;
+};
+
+void register_function_array_with_constant(SimpleFunctionFactory& factory) {
+    factory.register_function<FunctionArrayWithConstant<NameArrayWithConstant>>();
+    factory.register_function<FunctionArrayWithConstant<NameArrayRepeat>>();
+}
+#include "common/compile_check_end.h"
 } // namespace doris::vectorized

@@ -38,7 +38,6 @@ import java.util.stream.Collectors;
 public abstract class AggregateFunction extends BoundFunction implements ExpectsInputTypes {
 
     protected final boolean distinct;
-    protected boolean isWindowFunction = false;
 
     public AggregateFunction(String name, Expression... arguments) {
         this(name, false, arguments);
@@ -78,14 +77,6 @@ public abstract class AggregateFunction extends BoundFunction implements Expects
         return distinct;
     }
 
-    public boolean isWindowFunction() {
-        return isWindowFunction;
-    }
-
-    public void setWindowFunction(boolean windowFunction) {
-        isWindowFunction = windowFunction;
-    }
-
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -95,14 +86,13 @@ public abstract class AggregateFunction extends BoundFunction implements Expects
             return false;
         }
         AggregateFunction that = (AggregateFunction) o;
-        return isWindowFunction == that.isWindowFunction
-                && Objects.equals(distinct, that.distinct)
+        return Objects.equals(distinct, that.distinct)
                 && Objects.equals(getName(), that.getName())
                 && Objects.equals(children, that.children);
     }
 
     @Override
-    public int hashCode() {
+    public int computeHashCode() {
         return Objects.hash(distinct, getName(), children);
     }
 
@@ -117,12 +107,19 @@ public abstract class AggregateFunction extends BoundFunction implements Expects
     }
 
     @Override
-    public String toSql() throws UnboundException {
-        String args = children()
-                .stream()
-                .map(Expression::toSql)
-                .collect(Collectors.joining(", "));
-        return getName() + "(" + (distinct ? "DISTINCT " : "") + args + ")";
+    public String computeToSql() throws UnboundException {
+        StringBuilder sql = new StringBuilder(getName()).append("(");
+        if (distinct) {
+            sql.append("DISTINCT ");
+        }
+        int arity = arity();
+        for (int i = 0; i < arity; i++) {
+            sql.append(child(i).toSql());
+            if (i + 1 < arity) {
+                sql.append(", ");
+            }
+        }
+        return sql.append(")").toString();
     }
 
     @Override
@@ -134,4 +131,15 @@ public abstract class AggregateFunction extends BoundFunction implements Expects
         return getName() + "(" + (distinct ? "DISTINCT " : "") + args + ")";
     }
 
+    public boolean supportAggregatePhase(AggregatePhase aggregatePhase) {
+        return true;
+    }
+
+    public List<Expression> getDistinctArguments() {
+        return distinct ? getArguments() : ImmutableList.of();
+    }
+
+    public boolean mustUseMultiDistinctAgg() {
+        return false;
+    }
 }

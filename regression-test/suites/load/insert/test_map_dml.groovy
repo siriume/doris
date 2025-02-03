@@ -20,8 +20,6 @@ suite("test_map_dml", "load") {
     def testTable = "tbl_test_map_string_int"
     def testTable01 = "tbl_test_map_normal"
 
-    sql "ADMIN SET FRONTEND CONFIG ('enable_map_type' = 'true')"
-
     def create_test_table = {testTablex ->
         def result1 = sql """
             CREATE TABLE IF NOT EXISTS ${testTable} (
@@ -95,6 +93,7 @@ suite("test_map_dml", "load") {
 
         // select the table and check whether the data is correct
         qt_select "SELECT * FROM ${testTable} ORDER BY k1"
+        qt_select_count "SELECT COUNT(k1) FROM ${testTable}"
 
     } finally {
         try_sql("DROP TABLE IF EXISTS ${testTable}")
@@ -107,6 +106,7 @@ suite("test_map_dml", "load") {
         create_test_table01.call(testTable)
         // select the table and check whether the data is correct
         qt_select "SELECT * FROM ${testTable01} ORDER BY k1"
+        qt_select "SELECT COUNT(k2), COUNT(k3), COUNT(k4),COUNT(k5),COUNT(k6), COUNT(k7) FROM ${testTable01}"
 
     } finally {
         try_sql("DROP TABLE IF EXISTS ${testTable01}")

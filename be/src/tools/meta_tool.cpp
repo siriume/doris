@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <gen_cpp/olap_file.pb.h>
+#include <gen_cpp/segment_v2.pb.h>
 #include <gflags/gflags.h>
 
 #include <filesystem>
@@ -25,8 +27,6 @@
 #include <string>
 
 #include "common/status.h"
-#include "gen_cpp/olap_file.pb.h"
-#include "gen_cpp/segment_v2.pb.h"
 #include "gutil/strings/numbers.h"
 #include "gutil/strings/split.h"
 #include "gutil/strings/substitute.h"
@@ -38,6 +38,7 @@
 #include "olap/options.h"
 #include "olap/rowset/segment_v2/binary_plain_page.h"
 #include "olap/rowset/segment_v2/column_reader.h"
+#include "olap/storage_engine.h"
 #include "olap/tablet_meta.h"
 #include "olap/tablet_meta_manager.h"
 #include "olap/utils.h"
@@ -46,6 +47,7 @@
 
 using std::filesystem::path;
 using doris::DataDir;
+using doris::StorageEngine;
 using doris::OlapMeta;
 using doris::Status;
 using doris::TabletMeta;
@@ -140,9 +142,9 @@ void delete_meta(DataDir* data_dir) {
     std::cout << "delete meta successfully" << std::endl;
 }
 
-Status init_data_dir(const std::string& dir, std::unique_ptr<DataDir>* ret) {
+Status init_data_dir(StorageEngine& engine, const std::string& dir, std::unique_ptr<DataDir>* ret) {
     std::string root_path;
-    RETURN_IF_ERROR(io::global_local_filesystem()->canonicalize(dir, &root_path));
+    RETURN_IF_ERROR(doris::io::global_local_filesystem()->canonicalize(dir, &root_path));
     doris::StorePath path;
     auto res = parse_root_path(root_path, &path);
     if (!res.ok()) {
@@ -150,14 +152,13 @@ Status init_data_dir(const std::string& dir, std::unique_ptr<DataDir>* ret) {
         return Status::InternalError("parse root path failed");
     }
 
-    std::unique_ptr<DataDir> p(
-            new (std::nothrow) DataDir(path.path, path.capacity_bytes, path.storage_medium));
+    auto p = std::make_unique<DataDir>(engine, path.path, path.capacity_bytes, path.storage_medium);
     if (p == nullptr) {
         std::cout << "new data dir failed" << std::endl;
         return Status::InternalError("new data dir failed");
     }
-    st = p->init();
-    if (!st.ok()) {
+    res = p->init();
+    if (!res.ok()) {
         std::cout << "data_dir load failed" << std::endl;
         return Status::InternalError("data_dir load failed");
     }
@@ -177,6 +178,7 @@ void batch_delete_meta(const std::string& tablet_file) {
     int err_num = 0;
     int delete_num = 0;
     int total_num = 0;
+    StorageEngine engine(doris::EngineOptions {});
     std::unordered_map<std::string, std::unique_ptr<DataDir>> dir_map;
     while (std::getline(infile, line)) {
         total_num++;
@@ -188,7 +190,7 @@ void batch_delete_meta(const std::string& tablet_file) {
         }
         // 1. get dir
         std::string dir;
-        Status st = io::global_local_filesystem()->canonicalize(v[0], &dir);
+        Status st = doris::io::global_local_filesystem()->canonicalize(v[0], &dir);
         if (!st.ok()) {
             std::cout << "invalid root dir in tablet_file: " << line << std::endl;
             err_num++;
@@ -198,7 +200,7 @@ void batch_delete_meta(const std::string& tablet_file) {
         if (dir_map.find(dir) == dir_map.end()) {
             // new data dir, init it
             std::unique_ptr<DataDir> data_dir_p;
-            Status st = init_data_dir(dir, &data_dir_p);
+            Status st = init_data_dir(engine, dir, &data_dir_p);
             if (!st.ok()) {
                 std::cout << "invalid root path:" << FLAGS_root_path
                           << ", error: " << st.to_string() << std::endl;
@@ -295,7 +297,7 @@ Status get_segment_footer(doris::io::FileReader* file_reader, SegmentFooterPB* f
 
 void show_segment_footer(const std::string& file_name) {
     doris::io::FileReaderSPtr file_reader;
-    Status st = doris::io::global_local_filesystem()->open_file(file_name, &file_reader);
+    Status status = doris::io::global_local_filesystem()->open_file(file_name, &file_reader);
     if (!status.ok()) {
         std::cout << "open file failed: " << status << std::endl;
         return;
@@ -327,7 +329,8 @@ int main(int argc, char** argv) {
         show_meta();
     } else if (FLAGS_operation == "batch_delete_meta") {
         std::string tablet_file;
-        Status st = io::global_local_filesystem()->canonicalize(FLAGS_tablet_file, &tablet_file);
+        Status st =
+                doris::io::global_local_filesystem()->canonicalize(FLAGS_tablet_file, &tablet_file);
         if (!st.ok()) {
             std::cout << "invalid tablet file: " << FLAGS_tablet_file
                       << ", error: " << st.to_string() << std::endl;
@@ -349,8 +352,9 @@ int main(int argc, char** argv) {
             return -1;
         }
 
+        StorageEngine engine(doris::EngineOptions {});
         std::unique_ptr<DataDir> data_dir;
-        Status st = init_data_dir(FLAGS_root_path, &data_dir);
+        Status st = init_data_dir(engine, FLAGS_root_path, &data_dir);
         if (!st.ok()) {
             std::cout << "invalid root path:" << FLAGS_root_path << ", error: " << st.to_string()
                       << std::endl;

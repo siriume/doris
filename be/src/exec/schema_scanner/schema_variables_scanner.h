@@ -17,26 +17,35 @@
 
 #pragma once
 
-#include <map>
-#include <string>
+#include <gen_cpp/FrontendService_types.h>
+#include <gen_cpp/Types_types.h>
 
+#include <vector>
+
+#include "common/status.h"
 #include "exec/schema_scanner.h"
-#include "gen_cpp/FrontendService_types.h"
 
 namespace doris {
+class RuntimeState;
+
+namespace vectorized {
+class Block;
+} // namespace vectorized
 
 class SchemaVariablesScanner : public SchemaScanner {
+    ENABLE_FACTORY_CREATOR(SchemaVariablesScanner);
+
 public:
     SchemaVariablesScanner(TVarType::type type);
     ~SchemaVariablesScanner() override;
 
     Status start(RuntimeState* state) override;
-    Status get_next_block(vectorized::Block* block, bool* eos) override;
+    Status get_next_block_internal(vectorized::Block* block, bool* eos) override;
 
 private:
     struct VariableStruct {
-        const char* name;
-        const char* value;
+        const char* name = nullptr;
+        const char* value = nullptr;
     };
 
     Status _fill_block_impl(vectorized::Block* block);

@@ -46,18 +46,33 @@ public class ConfigBase {
 
     @Retention(RetentionPolicy.RUNTIME)
     public @interface ConfField {
-        String value() default "";
         boolean mutable() default false;
+
         boolean masterOnly() default false;
+
         String comment() default "";
+
+        VariableAnnotation varType() default VariableAnnotation.NONE;
+
         Class<? extends ConfHandler> callback() default DefaultConfHandler.class;
+
+        String callbackClassString() default "";
+
+        // description for this config item.
+        // There should be 2 elements in the array.
+        // The first element is the description in Chinese.
+        // The second element is the description in English.
+        String[] description() default {"待补充", "TODO"};
+
+        // Enum options for this config item, if it has.
+        String[] options() default {};
     }
 
     public interface ConfHandler {
         void handle(Field field, String confVal) throws Exception;
     }
 
-    static class DefaultConfHandler implements ConfHandler {
+    public static class DefaultConfHandler implements ConfHandler {
         @Override
         public void handle(Field field, String confVal) throws Exception {
             setConfigField(field, confVal);
@@ -87,7 +102,8 @@ public class ConfigBase {
                 if (confField == null) {
                     continue;
                 }
-                confFields.put(confField.value().equals("") ? field.getName() : confField.value(), field);
+                confFields.put(field.getName(), field);
+                confFields.put(confField.varType().getPrefix() + field.getName(), field);
             }
 
             initConf(confFile);
@@ -100,10 +116,15 @@ public class ConfigBase {
                 if (confField == null) {
                     continue;
                 }
-                ldapConfFields.put(confField.value().equals("") ? field.getName() : confField.value(), field);
+                ldapConfFields.put(field.getName(), field);
+                ldapConfFields.put(confField.varType().getPrefix() + field.getName(), field);
             }
             initConf(ldapConfFile);
         }
+    }
+
+    public static Field getField(String name) {
+        return confFields.get(name);
     }
 
     public void initCustom(String customConfFile) throws Exception {
@@ -118,7 +139,9 @@ public class ConfigBase {
 
     private void initConf(String confFile) throws Exception {
         Properties props = new Properties();
-        props.load(new FileReader(confFile));
+        try (FileReader fr = new FileReader(confFile)) {
+            props.load(fr);
+        }
         replacedByEnv(props);
         setFields(props, isLdapConfig);
     }
@@ -129,7 +152,7 @@ public class ConfigBase {
         for (Field f : fields) {
             ConfField anno = f.getAnnotation(ConfField.class);
             if (anno != null) {
-                map.put(anno.value().isEmpty() ? f.getName() : anno.value(), getConfValue(f));
+                map.put(f.getName(), getConfValue(f));
             }
         }
         return map;
@@ -199,22 +222,22 @@ public class ConfigBase {
             }
 
             // ensure that field has property string
-            String confKey = anno.value().equals("") ? f.getName() : anno.value();
-            String confVal = props.getProperty(confKey);
+            String confKey = f.getName();
+            String confVal = props.getProperty(confKey, props.getProperty(anno.varType().getPrefix() + confKey));
             if (Strings.isNullOrEmpty(confVal)) {
                 continue;
             }
 
-            setConfigField(f, confVal);
-
-            // to be compatible with old version
-            if (confKey.equalsIgnoreCase("async_load_task_pool_size")) {
-                Config.async_loading_load_task_pool_size = Config.async_load_task_pool_size;
+            try {
+                setConfigField(f, confVal);
+            } catch (Exception e) {
+                String msg = String.format("Failed to set config, name: %s, value: %s", f.getName(), confVal);
+                throw new IllegalArgumentException(msg, e);
             }
         }
     }
 
-    public static void setConfigField(Field f, String confVal) throws Exception {
+    private static void setConfigField(Field f, String confVal) throws Exception {
         confVal = confVal.trim();
 
         String[] sa = confVal.split(",");
@@ -317,25 +340,62 @@ public class ConfigBase {
             throw new ConfigException("Failed to set config '" + key + "'. err: " + e.getMessage());
         }
 
+        String callbackClassString = anno.callbackClassString();
+        if (!Strings.isNullOrEmpty(callbackClassString)) {
+            try {
+                ConfHandler confHandler = (ConfHandler) Class.forName(anno.callbackClassString()).newInstance();
+                confHandler.handle(field, value);
+            } catch (Exception e) {
+                throw new ConfigException("Failed to set config '" + key + "'. err: " + e.getMessage());
+            }
+        }
+
         LOG.info("set config {} to {}", key, value);
+    }
+
+    /**
+     * Get display name of experimental configs.
+     * For an experimental/deprecated config, the given "configsToFilter" contains both config w/o
+     * "experimental_/deprecated_" prefix.
+     *
+     * @param configsToFilter
+     * @param allConfigs
+     */
+    private static void getDisplayConfigInfo(Map<String, Field> configsToFilter, Map<String, Field> allConfigs) {
+        for (Map.Entry<String, Field> e : configsToFilter.entrySet()) {
+            Field f = e.getValue();
+            ConfField confField = f.getAnnotation(ConfField.class);
+
+            if (!e.getKey().startsWith(confField.varType().getPrefix())) {
+                continue;
+            }
+            allConfigs.put(e.getKey(), f);
+        }
     }
 
     public static synchronized List<List<String>> getConfigInfo(PatternMatcher matcher) {
         Map<String, Field> allConfFields = Maps.newHashMap();
-        allConfFields.putAll(confFields);
-        allConfFields.putAll(ldapConfFields);
+        getDisplayConfigInfo(confFields, allConfFields);
+        getDisplayConfigInfo(ldapConfFields, allConfFields);
+
         return allConfFields.entrySet().stream().sorted(Map.Entry.comparingByKey()).flatMap(e -> {
             String confKey = e.getKey();
             Field f = e.getValue();
-            ConfField anno = f.getAnnotation(ConfField.class);
+            ConfField confField = f.getAnnotation(ConfField.class);
             if (matcher == null || matcher.match(confKey)) {
                 List<String> config = Lists.newArrayList();
                 config.add(confKey);
-                config.add(getConfValue(f));
+                String value = getConfValue(f);
+                // For compatibility, this PR #32933 change the log dir's config logic,
+                // and deprecate the `sys_log_dir` config.
+                if (confKey.equals("sys_log_dir") && Strings.isNullOrEmpty(value)) {
+                    value = System.getenv("DORIS_HOME") + "/log";
+                }
+                config.add(value);
                 config.add(f.getType().getSimpleName());
-                config.add(String.valueOf(anno.mutable()));
-                config.add(String.valueOf(anno.masterOnly()));
-                config.add(anno.comment());
+                config.add(String.valueOf(confField.mutable()));
+                config.add(String.valueOf(confField.masterOnly()));
+                config.add(confField.comment());
                 return Stream.of(config);
             } else {
                 return Stream.empty();
@@ -358,6 +418,7 @@ public class ConfigBase {
             throws IOException {
         File file = new File(customConfFile);
         if (!file.exists()) {
+            file.getParentFile().mkdirs();
             file.createNewFile();
         } else if (resetPersist) {
             // clear the customConfFile content
@@ -367,7 +428,9 @@ public class ConfigBase {
         }
 
         Properties props = new Properties();
-        props.load(new FileReader(customConfFile));
+        try (FileReader fr = new FileReader(customConfFile)) {
+            props.load(fr);
+        }
 
         for (Map.Entry<String, String> entry : customConf.entrySet()) {
             props.setProperty(entry.getKey(), entry.getValue());
@@ -378,5 +441,19 @@ public class ConfigBase {
                     + "You can modify this file manually, and the configurations in this file\n"
                     + "will overwrite the configurations in fe.conf");
         }
+    }
+
+    public static int getConfigNumByVariableAnnotation(VariableAnnotation type) {
+        int num = 0;
+        for (Field field : Config.class.getFields()) {
+            ConfField confField = field.getAnnotation(ConfField.class);
+            if (confField == null) {
+                continue;
+            }
+            if (confField.varType() == type) {
+                ++num;
+            }
+        }
+        return num;
     }
 }

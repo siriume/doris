@@ -17,9 +17,18 @@
 
 #include "vec/aggregate_functions/aggregate_function_orthogonal_bitmap.h"
 
+#include <map>
+#include <ostream>
+
 #include "vec/aggregate_functions/aggregate_function_simple_factory.h"
 #include "vec/aggregate_functions/helpers.h"
-#include "vec/data_types/data_type_string.h"
+#include "vec/data_types/data_type.h"
+#include "vec/data_types/data_type_nullable.h"
+
+namespace doris {
+#include "common/compile_check_begin.h"
+struct StringRef;
+} // namespace doris
 
 namespace doris::vectorized {
 
@@ -27,12 +36,14 @@ template <template <typename> class Impl>
 AggregateFunctionPtr create_aggregate_function_orthogonal(const std::string& name,
                                                           const DataTypes& argument_types,
 
-                                                          const bool result_is_nullable) {
+                                                          const bool result_is_nullable,
+                                                          const AggregateFunctionAttr& attr) {
     if (argument_types.empty()) {
         LOG(WARNING) << "Incorrect number of arguments for aggregate function " << name;
         return nullptr;
     } else if (argument_types.size() == 1) {
-        return std::make_shared<AggFunctionOrthBitmapFunc<Impl<StringRef>>>(argument_types);
+        return creator_without_type::create<AggFunctionOrthBitmapFunc<Impl<StringRef>>>(
+                argument_types, result_is_nullable);
     } else {
         WhichDataType which(*remove_nullable(argument_types[1]));
 

@@ -25,7 +25,7 @@ import org.apache.doris.common.ErrorReport;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.collect.Maps;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -207,6 +207,22 @@ public class SqlModeHelper {
 
     public static Map<String, Long> getCombineMode() {
         return combineModeSet;
+    }
+
+    public static boolean hasNoBackSlashEscapes() {
+        SessionVariable sessionVariable = ConnectContext.get() == null
+                ? VariableMgr.newSessionVariable()
+                : ConnectContext.get().getSessionVariable();
+        return ((sessionVariable.getSqlMode() & MODE_ALLOWED_MASK)
+                & MODE_NO_BACKSLASH_ESCAPES) != 0;
+    }
+
+    public static boolean hasPipeAsConcat() {
+        SessionVariable sessionVariable = ConnectContext.get() == null
+                ? VariableMgr.newSessionVariable()
+                : ConnectContext.get().getSessionVariable();
+        return ((sessionVariable.getSqlMode() & MODE_ALLOWED_MASK)
+                & MODE_PIPES_AS_CONCAT) != 0;
     }
 
 }

@@ -78,6 +78,36 @@ v1
 "\\n\\b\\r\\t"
 
 -- !sql --
+""
+
+-- !sql --
+
+
+-- !sql --
+doris
+
+-- !sql --
+doris
+
+-- !sql --
+open-quoted"
+
+-- !sql --
+"open-quoted
+
+-- !sql --
+\N
+
+-- !sql --
+Dorris\	ishere\n
+
+-- !sql --
+Dorris\	ishere\n
+
+-- !sql --
+DORIS
+
+-- !sql --
 2
 
 -- !sql --
@@ -94,4 +124,34 @@ v1
 
 -- !sql --
 [6.6,[1,2,3],2]
+
+-- !sql --
+true
+
+-- !sql --
+false
+
+-- !sql --
+false
+
+-- !sql --
+true
+
+-- !sql --
+false
+
+-- !sql --
+true
+
+-- !sql --
+true
+
+-- !sql --
+\N
+
+-- !sql --
+\N
+
+-- !sql --
+\N
 

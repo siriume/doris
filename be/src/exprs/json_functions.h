@@ -17,14 +17,25 @@
 
 #pragma once
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <rapidjson/document.h>
-#include <simdjson.h>
+#include <simdjson.h> // IWYU pragma: keep
 
 #include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "common/status.h"
-#include "udf/udf.h"
+
+namespace simdjson {
+namespace fallback {
+namespace ondemand {
+class object;
+class value;
+} // namespace ondemand
+} // namespace fallback
+} // namespace simdjson
 
 namespace doris {
 
@@ -35,8 +46,6 @@ enum JsonFunctionType {
 
     JSON_FUN_UNKNOWN //The last
 };
-
-class OpcodeRegistry;
 
 struct JsonPath {
     std::string key; // key of a json object
@@ -99,6 +108,15 @@ public:
     static Status extract_from_object(simdjson::ondemand::object& obj,
                                       const std::vector<JsonPath>& jsonpath,
                                       simdjson::ondemand::value* value) noexcept;
+    // src:    {"a" : "b" {"c" : 1}, "e" : 123}
+    // dst:    {"a" : "b" {"d" : 1}}
+    // merged: {"a" : "b" : {"c" : 1, "d" : 1}, "e" : 123}
+    static void merge_objects(rapidjson::Value& dst_object, rapidjson::Value& src_object,
+                              rapidjson::Document::AllocatorType& allocator);
+
+    static std::string print_json_value(const rapidjson::Value& value);
+
+    static bool is_root_path(const std::vector<JsonPath>& json_path);
 
 private:
     static rapidjson::Value* match_value(const std::vector<JsonPath>& parsed_paths,

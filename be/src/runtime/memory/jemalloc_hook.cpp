@@ -15,8 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <features.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#include "common/compiler_util.h" // IWYU pragma: keep
 #include "jemalloc/jemalloc.h"
 #include "runtime/thread_context.h"
+#include "util/sse_util.hpp"
 
 #ifndef __THROW
 #if __cplusplus
@@ -27,20 +33,25 @@
 #endif
 
 extern "C" {
+
+// Both je_nallocx and je_malloc will use the lock je_malloc_mutex_lock_slow,
+// so enabling the jemalloc hook will double the lock usage.
+// In extreme cases this will affect performance, consider turning off mem hook
+// mem hook should avoid nesting new/malloc.
+
 void* doris_malloc(size_t size) __THROW {
-    // Both je_nallocx and je_malloc will use the lock je_malloc_mutex_lock_slow,
-    // so enabling the jemalloc hook will double the lock usage.
-    // In extreme cases this will affect performance, consider turning off mem hook
-    TRY_CONSUME_MEM_TRACKER(jenallocx(size, 0), nullptr);
+    CONSUME_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN([](size_t size) { return jenallocx(size, 0); },
+                                               size);
     void* ptr = jemalloc(size);
     if (UNLIKELY(ptr == nullptr)) {
-        RELEASE_MEM_TRACKER(jenallocx(size, 0));
+        RELEASE_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN([](size_t size) { return jenallocx(size, 0); },
+                                                   size);
     }
     return ptr;
 }
 
 void doris_free(void* p) __THROW {
-    RELEASE_MEM_TRACKER(jemalloc_usable_size(p));
+    RELEASE_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN([](void* p) { return jemalloc_usable_size(p); }, p);
     jefree(p);
 }
 
@@ -49,16 +60,22 @@ void* doris_realloc(void* p, size_t size) __THROW {
         return nullptr;
     }
 
-#if USE_MEM_TRACKER
+#if defined(USE_MEM_TRACKER) && !defined(BE_TEST)
     int64_t old_size = jemalloc_usable_size(p);
-#endif
-
-    TRY_CONSUME_MEM_TRACKER(jenallocx(size, 0) - old_size, nullptr);
+    CONSUME_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN(
+            [](size_t size, int64_t old_size) { return jenallocx(size, 0) - old_size; }, size,
+            old_size);
     void* ptr = jerealloc(p, size);
     if (UNLIKELY(ptr == nullptr)) {
-        RELEASE_MEM_TRACKER(jenallocx(size, 0) - old_size);
+        RELEASE_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN(
+                [](size_t size, int64_t old_size) { return jenallocx(size, 0) - old_size; }, size,
+                old_size);
     }
     return ptr;
+#else
+    void* ptr = jerealloc(p, size);
+    return ptr;
+#endif
 }
 
 void* doris_calloc(size_t n, size_t size) __THROW {
@@ -66,72 +83,80 @@ void* doris_calloc(size_t n, size_t size) __THROW {
         return nullptr;
     }
 
-    TRY_CONSUME_MEM_TRACKER(n * size, nullptr);
+    CONSUME_THREAD_MEM_TRACKER_BY_HOOK(n * size);
     void* ptr = jecalloc(n, size);
     if (UNLIKELY(ptr == nullptr)) {
-        RELEASE_MEM_TRACKER(n * size);
+        RELEASE_THREAD_MEM_TRACKER_BY_HOOK(n * size);
     } else {
-        CONSUME_MEM_TRACKER(jemalloc_usable_size(ptr) - n * size);
+        CONSUME_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN(
+                [](void* ptr, size_t size) { return jemalloc_usable_size(ptr) - size; }, ptr,
+                n * size);
     }
     return ptr;
 }
 
 void doris_cfree(void* ptr) __THROW {
-    RELEASE_MEM_TRACKER(jemalloc_usable_size(ptr));
+    RELEASE_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN([](void* ptr) { return jemalloc_usable_size(ptr); },
+                                               ptr);
     jefree(ptr);
 }
 
 void* doris_memalign(size_t align, size_t size) __THROW {
-    TRY_CONSUME_MEM_TRACKER(size, nullptr);
+    CONSUME_THREAD_MEM_TRACKER_BY_HOOK(size);
     void* ptr = jealigned_alloc(align, size);
     if (UNLIKELY(ptr == nullptr)) {
-        RELEASE_MEM_TRACKER(size);
+        RELEASE_THREAD_MEM_TRACKER_BY_HOOK(size);
     } else {
-        CONSUME_MEM_TRACKER(jemalloc_usable_size(ptr) - size);
+        CONSUME_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN(
+                [](void* ptr, size_t size) { return jemalloc_usable_size(ptr) - size; }, ptr, size);
     }
     return ptr;
 }
 
 void* doris_aligned_alloc(size_t align, size_t size) __THROW {
-    TRY_CONSUME_MEM_TRACKER(size, nullptr);
+    CONSUME_THREAD_MEM_TRACKER_BY_HOOK(size);
     void* ptr = jealigned_alloc(align, size);
     if (UNLIKELY(ptr == nullptr)) {
-        RELEASE_MEM_TRACKER(size);
+        RELEASE_THREAD_MEM_TRACKER_BY_HOOK(size);
     } else {
-        CONSUME_MEM_TRACKER(jemalloc_usable_size(ptr) - size);
+        CONSUME_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN(
+                [](void* ptr, size_t size) { return jemalloc_usable_size(ptr) - size; }, ptr, size);
     }
     return ptr;
 }
 
 void* doris_valloc(size_t size) __THROW {
-    TRY_CONSUME_MEM_TRACKER(size, nullptr);
+    CONSUME_THREAD_MEM_TRACKER_BY_HOOK(size);
     void* ptr = jevalloc(size);
     if (UNLIKELY(ptr == nullptr)) {
-        RELEASE_MEM_TRACKER(size);
+        RELEASE_THREAD_MEM_TRACKER_BY_HOOK(size);
     } else {
-        CONSUME_MEM_TRACKER(jemalloc_usable_size(ptr) - size);
+        CONSUME_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN(
+                [](void* ptr, size_t size) { return jemalloc_usable_size(ptr) - size; }, ptr, size);
     }
     return ptr;
 }
 
 void* doris_pvalloc(size_t size) __THROW {
-    TRY_CONSUME_MEM_TRACKER(size, nullptr);
+    CONSUME_THREAD_MEM_TRACKER_BY_HOOK(size);
     void* ptr = jevalloc(size);
     if (UNLIKELY(ptr == nullptr)) {
-        RELEASE_MEM_TRACKER(size);
+        RELEASE_THREAD_MEM_TRACKER_BY_HOOK(size);
     } else {
-        CONSUME_MEM_TRACKER(jemalloc_usable_size(ptr) - size);
+        CONSUME_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN(
+                [](void* ptr, size_t size) { return jemalloc_usable_size(ptr) - size; }, ptr, size);
     }
     return ptr;
 }
 
 int doris_posix_memalign(void** r, size_t align, size_t size) __THROW {
-    TRY_CONSUME_MEM_TRACKER(size, ENOMEM);
+    CONSUME_THREAD_MEM_TRACKER_BY_HOOK(size);
     int ret = jeposix_memalign(r, align, size);
     if (UNLIKELY(ret != 0)) {
-        RELEASE_MEM_TRACKER(size);
+        RELEASE_THREAD_MEM_TRACKER_BY_HOOK(size);
     } else {
-        CONSUME_MEM_TRACKER(jemalloc_usable_size(*r) - size);
+        CONSUME_THREAD_MEM_TRACKER_BY_HOOK_WITH_FN(
+                [](void* ptr, size_t size) { return jemalloc_usable_size(ptr) - size; }, *r, size);
     }
     return ret;
 }

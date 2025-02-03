@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <cctz/time_zone.h>
+
 #include <memory>
 
 #include "common/status.h"
@@ -36,11 +38,9 @@ class Schema;
 
 namespace doris {
 
-class ObjectPool;
-class RowDescriptor;
-
 Status convert_to_arrow_batch(const vectorized::Block& block,
                               const std::shared_ptr<arrow::Schema>& schema, arrow::MemoryPool* pool,
-                              std::shared_ptr<arrow::RecordBatch>* result);
+                              std::shared_ptr<arrow::RecordBatch>* result,
+                              const cctz::time_zone& timezone_obj);
 
 } // namespace doris

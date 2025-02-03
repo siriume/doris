@@ -26,7 +26,6 @@ import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
 import org.apache.doris.nereids.types.VarcharType;
 import org.apache.doris.nereids.util.ExpressionUtils;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
@@ -42,14 +41,17 @@ public class JsonObject extends ScalarFunction
     );
 
     /**
-     * constructor with 1 or more arguments.
+     * constructor with 0 or more arguments.
      */
-    public JsonObject(Expression arg, Expression... varArgs) {
-        super("json_object", ExpressionUtils.mergeArguments(arg, varArgs));
+    public JsonObject(Expression... varArgs) {
+        super("json_object", ExpressionUtils.mergeArguments(varArgs));
     }
 
     @Override
     public void checkLegalityBeforeTypeCoercion() {
+        if ((arity() & 1) == 1) {
+            throw new AnalysisException("json_object can't be odd parameters, need even parameters: " + this.toSql());
+        }
         for (int i = 0; i < arity(); i++) {
             if ((i & 1) == 0 && getArgumentType(i).isNullType()) {
                 throw new AnalysisException("json_object key can't be NULL: " + this.toSql());
@@ -62,9 +64,7 @@ public class JsonObject extends ScalarFunction
      */
     @Override
     public JsonObject withChildren(List<Expression> children) {
-        Preconditions.checkArgument(children.size() >= 1);
-        return new JsonObject(children.get(0),
-                children.subList(1, children.size()).toArray(new Expression[0]));
+        return new JsonObject(children.toArray(new Expression[0]));
     }
 
     @Override

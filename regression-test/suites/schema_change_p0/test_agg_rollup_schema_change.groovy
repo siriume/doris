@@ -1,4 +1,4 @@
-      
+
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -28,43 +28,25 @@ suite ("test_agg_rollup_schema_change") {
          def jobStateResult = sql """  SHOW ALTER TABLE COLUMN WHERE IndexName='${tbName}' ORDER BY createtime DESC LIMIT 1 """
          return jobStateResult[0][9]
     }
-
-    try {
-
-        String[][] backends = sql """ show backends; """
-        assertTrue(backends.size() > 0)
-        String backend_id;
-        def backendId_to_backendIP = [:]
-        def backendId_to_backendHttpPort = [:]
-        for (String[] backend in backends) {
-            backendId_to_backendIP.put(backend[0], backend[2])
-            backendId_to_backendHttpPort.put(backend[0], backend[5])
-        }
-
-        backend_id = backendId_to_backendIP.keySet()[0]
-        StringBuilder showConfigCommand = new StringBuilder();
-        showConfigCommand.append("curl -X GET http://")
-        showConfigCommand.append(backendId_to_backendIP.get(backend_id))
-        showConfigCommand.append(":")
-        showConfigCommand.append(backendId_to_backendHttpPort.get(backend_id))
-        showConfigCommand.append("/api/show_config")
-        logger.info(showConfigCommand.toString())
-        def process = showConfigCommand.toString().execute()
-        int code = process.waitFor()
-        String err = IOGroovyMethods.getText(new BufferedReader(new InputStreamReader(process.getErrorStream())));
-        String out = process.getText()
-        logger.info("Show config: code=" + code + ", out=" + out + ", err=" + err)
-        assertEquals(code, 0)
-        def configList = parseJson(out.trim())
-        assert configList instanceof List
-
-        boolean disableAutoCompaction = true
-        for (Object ele in (List) configList) {
-            assert ele instanceof List<String>
-            if (((List<String>) ele)[0] == "disable_auto_compaction") {
-                disableAutoCompaction = Boolean.parseBoolean(((List<String>) ele)[2])
+    def waitForMVJob =  (tbName, timeout) -> {
+        while (timeout--){
+            String result = getMVJobState(tbName)
+            if (result == "FINISHED") {
+                sleep(3000)
+                break
+            } else {
+                sleep(100)
+                if (timeout < 1){
+                    assertEquals(1,2)
+                }
             }
         }
+    }
+
+    try {
+        def backendId_to_backendIP = [:]
+        def backendId_to_backendHttpPort = [:]
+        getBackendIpHttpPort(backendId_to_backendIP, backendId_to_backendHttpPort);
 
         sql """ DROP TABLE IF EXISTS ${tableName} """
         sql """
@@ -81,26 +63,14 @@ suite ("test_agg_rollup_schema_change") {
                     `hll_col` HLL HLL_UNION NOT NULL COMMENT "HLL列",
                     `bitmap_col` Bitmap BITMAP_UNION NOT NULL COMMENT "bitmap列")
                 AGGREGATE KEY(`user_id`, `date`, `city`, `age`, `sex`) DISTRIBUTED BY HASH(`user_id`)
-                BUCKETS 1
-                PROPERTIES ( "replication_num" = "1", "light_schema_change" = "true" );
+                BUCKETS 8
+                PROPERTIES ( "replication_num" = "1", "light_schema_change" = "false" );
             """
 
         //add rollup
         def rollupName = "rollup_cost"
-        sql "ALTER TABLE ${tableName} ADD ROLLUP ${rollupName}(`user_id`,`date`,`city`,`age`, cost);"
-        int max_try_time = 3000
-        while (max_try_time--){
-            String result = getMVJobState(tableName)
-            if (result == "FINISHED") {
-                sleep(3000)
-                break
-            } else {
-                sleep(100)
-                if (max_try_time < 1){
-                    assertEquals(1,2)
-                }
-            }
-        }
+        sql "ALTER TABLE ${tableName} ADD ROLLUP ${rollupName}(`user_id`,`date`,`age`, `cost`);"
+        waitForMVJob(tableName, 3000)
 
         sql """ INSERT INTO ${tableName} VALUES
                 (1, '2017-10-01', 'Beijing', 10, 1, 1, 30, 20, hll_hash(1), to_bitmap(1))
@@ -108,6 +78,18 @@ suite ("test_agg_rollup_schema_change") {
         sql """ INSERT INTO ${tableName} VALUES
                 (1, '2017-10-01', 'Beijing', 10, 1, 1, 31, 19, hll_hash(2), to_bitmap(2))
             """
+        qt_sc """ select * from ${tableName} order by user_id """
+
+        // alter and test light schema change
+        if (!isCloudMode()) {
+            sql """ALTER TABLE ${tableName} SET ("light_schema_change" = "true");"""
+        }
+
+        //add rollup
+        def rollupName2 = "rollup_city"
+        sql "ALTER TABLE ${tableName} ADD ROLLUP ${rollupName2}(`user_id`,`city`);"
+        waitForMVJob(tableName, 3000)
+
         sql """ INSERT INTO ${tableName} VALUES
                 (2, '2017-10-01', 'Beijing', 10, 1, 1, 31, 21, hll_hash(2), to_bitmap(2))
             """
@@ -117,12 +99,19 @@ suite ("test_agg_rollup_schema_change") {
 
         qt_sc """ select * from ${tableName} order by user_id """
 
-        // drop value column with rollup, not light schema change
+        test {
+            sql "ALTER TABLE ${tableName} DROP COLUMN cost"
+            exception "Can not drop column contained by mv, mv=rollup_cost"
+        }
+
+        sql""" drop materialized view rollup_cost on ${tableName}; """
+
+        // drop column
         sql """
             ALTER TABLE ${tableName} DROP COLUMN cost
             """
 
-        max_try_time = 3000
+        def max_try_time = 3000
         while (max_try_time--){
             String result = getJobState(tableName)
             if (result == "FINISHED") {
@@ -167,57 +156,8 @@ suite ("test_agg_rollup_schema_change") {
             """
 
         // compaction
-        String[][] tablets = sql """ show tablets from ${tableName}; """
-        for (String[] tablet in tablets) {
-                String tablet_id = tablet[0]
-                backend_id = tablet[2]
-                logger.info("run compaction:" + tablet_id)
-                StringBuilder sb = new StringBuilder();
-                sb.append("curl -X POST http://")
-                sb.append(backendId_to_backendIP.get(backend_id))
-                sb.append(":")
-                sb.append(backendId_to_backendHttpPort.get(backend_id))
-                sb.append("/api/compaction/run?tablet_id=")
-                sb.append(tablet_id)
-                sb.append("&compact_type=cumulative")
+        trigger_and_wait_compaction(tableName, "cumulative")
 
-                String command = sb.toString()
-                process = command.execute()
-                code = process.waitFor()
-                err = IOGroovyMethods.getText(new BufferedReader(new InputStreamReader(process.getErrorStream())));
-                out = process.getText()
-                logger.info("Run compaction: code=" + code + ", out=" + out + ", err=" + err)
-                //assertEquals(code, 0)
-        }
-
-        // wait for all compactions done
-        for (String[] tablet in tablets) {
-                boolean running = true
-                do {
-                    Thread.sleep(100)
-                    String tablet_id = tablet[0]
-                    backend_id = tablet[2]
-                    StringBuilder sb = new StringBuilder();
-                    sb.append("curl -X GET http://")
-                    sb.append(backendId_to_backendIP.get(backend_id))
-                    sb.append(":")
-                    sb.append(backendId_to_backendHttpPort.get(backend_id))
-                    sb.append("/api/compaction/run_status?tablet_id=")
-                    sb.append(tablet_id)
-
-                    String command = sb.toString()
-                    process = command.execute()
-                    code = process.waitFor()
-                    err = IOGroovyMethods.getText(new BufferedReader(new InputStreamReader(process.getErrorStream())));
-                    out = process.getText()
-                    logger.info("Get compaction status: code=" + code + ", out=" + out + ", err=" + err)
-                    assertEquals(code, 0)
-                    def compactionStatus = parseJson(out.trim())
-                    assertEquals("success", compactionStatus.status.toLowerCase())
-                    running = compactionStatus.run_status
-                } while (running)
-        }
-         
         qt_sc """ select count(*) from ${tableName} """
 
         qt_sc """  SELECT * FROM ${tableName} WHERE user_id=2 """

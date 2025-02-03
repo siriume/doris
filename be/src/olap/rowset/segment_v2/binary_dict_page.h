@@ -18,22 +18,32 @@
 #pragma once
 
 #include <parallel_hashmap/phmap.h>
+#include <stddef.h>
+#include <stdint.h>
 
-#include <functional>
 #include <memory>
-#include <string>
+#include <vector>
 
-#include "gen_cpp/segment_v2.pb.h"
-#include "gutil/hash/string_hash.h"
+#include "common/status.h"
 #include "olap/olap_common.h"
 #include "olap/rowset/segment_v2/binary_plain_page.h"
-#include "olap/rowset/segment_v2/bitshuffle_page.h"
 #include "olap/rowset/segment_v2/common.h"
 #include "olap/rowset/segment_v2/options.h"
+#include "olap/rowset/segment_v2/page_builder.h"
+#include "olap/rowset/segment_v2/page_decoder.h"
+#include "util/faststring.h"
+#include "util/slice.h"
 #include "vec/common/arena.h"
+#include "vec/common/string_ref.h"
+#include "vec/data_types/data_type.h"
 
 namespace doris {
+struct StringRef;
+
 namespace segment_v2 {
+enum EncodingTypePB : int;
+template <FieldType Type>
+class BitShufflePageDecoder;
 
 enum { BINARY_DICT_PAGE_HEADER_SIZE = 4 };
 
@@ -47,17 +57,20 @@ enum { BINARY_DICT_PAGE_HEADER_SIZE = 4 };
 // Data pages start with mode_ = DICT_ENCODING, when the size of dictionary
 // page go beyond the option_->dict_page_size, the subsequent data pages will switch
 // to string plain page automatically.
-class BinaryDictPageBuilder : public PageBuilder {
+class BinaryDictPageBuilder : public PageBuilderHelper<BinaryDictPageBuilder> {
 public:
-    BinaryDictPageBuilder(const PageBuilderOptions& options);
+    using Self = BinaryDictPageBuilder;
+    friend class PageBuilderHelper<Self>;
+
+    Status init() override;
 
     bool is_page_full() override;
 
     Status add(const uint8_t* vals, size_t* count) override;
 
-    OwnedSlice finish() override;
+    Status finish(OwnedSlice* slice) override;
 
-    void reset() override;
+    Status reset() override;
 
     size_t count() const override;
 
@@ -70,18 +83,19 @@ public:
     Status get_last_value(void* value) const override;
 
 private:
+    BinaryDictPageBuilder(const PageBuilderOptions& options);
+
     PageBuilderOptions _options;
     bool _finished;
 
     std::unique_ptr<PageBuilder> _data_page_builder;
 
-    std::unique_ptr<BinaryPlainPageBuilder<OLAP_FIELD_TYPE_VARCHAR>> _dict_builder;
+    std::unique_ptr<BinaryPlainPageBuilder<FieldType::OLAP_FIELD_TYPE_VARCHAR>> _dict_builder =
+            nullptr;
 
     EncodingTypePB _encoding_type;
     struct HashOfSlice {
-        size_t operator()(const Slice& slice) const {
-            return HashStringThoroughly(slice.data, slice.size);
-        }
+        size_t operator()(const Slice& slice) const { return crc32_hash(slice.data, slice.size); }
     };
     // query for dict item -> dict id
     phmap::flat_hash_map<Slice, uint32_t, HashOfSlice> _dictionary;
@@ -123,12 +137,14 @@ private:
     Slice _data;
     PageDecoderOptions _options;
     std::unique_ptr<PageDecoder> _data_page_decoder;
-    BinaryPlainPageDecoder<OLAP_FIELD_TYPE_VARCHAR>* _dict_decoder = nullptr;
-    BitShufflePageDecoder<OLAP_FIELD_TYPE_INT>* _bit_shuffle_ptr = nullptr;
+    BinaryPlainPageDecoder<FieldType::OLAP_FIELD_TYPE_VARCHAR>* _dict_decoder = nullptr;
+    BitShufflePageDecoder<FieldType::OLAP_FIELD_TYPE_INT>* _bit_shuffle_ptr = nullptr;
     bool _parsed;
     EncodingTypePB _encoding_type;
 
     StringRef* _dict_word_info = nullptr;
+
+    std::vector<int32_t> _buffer;
 };
 
 } // namespace segment_v2

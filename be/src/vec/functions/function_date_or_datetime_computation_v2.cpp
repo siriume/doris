@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include "vec/data_types/data_type_time_v2.h"
 #include "vec/functions/function_date_or_datetime_computation.h"
 #include "vec/functions/simple_function_factory.h"
 
@@ -46,6 +47,8 @@ using FunctionToWeekTwoArgsV2 =
 
 using FunctionDatetimeV2AddMicroseconds =
         FunctionDateOrDateTimeComputation<AddMicrosecondsImpl<DataTypeDateTimeV2>>;
+using FunctionDatetimeV2AddMilliseconds =
+        FunctionDateOrDateTimeComputation<AddMillisecondsImpl<DataTypeDateTimeV2>>;
 using FunctionDatetimeV2AddSeconds =
         FunctionDateOrDateTimeComputation<AddSecondsImpl<DataTypeDateTimeV2>>;
 using FunctionDatetimeV2AddMinutes =
@@ -65,6 +68,8 @@ using FunctionDatetimeV2AddYears =
 
 using FunctionDatetimeV2SubMicroseconds =
         FunctionDateOrDateTimeComputation<SubtractMicrosecondsImpl<DataTypeDateTimeV2>>;
+using FunctionDatetimeV2SubMilliseconds =
+        FunctionDateOrDateTimeComputation<SubtractMillisecondsImpl<DataTypeDateTimeV2>>;
 using FunctionDatetimeV2SubSeconds =
         FunctionDateOrDateTimeComputation<SubtractSecondsImpl<DataTypeDateTimeV2>>;
 using FunctionDatetimeV2SubMinutes =
@@ -89,21 +94,19 @@ using FunctionDatetimeV2SubYears =
     FUNCTION_DATEV2_WITH_TWO_ARGS(NAME, IMPL, DataTypeDateTimeV2, DataTypeDateTimeV2) \
     FUNCTION_DATEV2_WITH_TWO_ARGS(NAME, IMPL, DataTypeDateTimeV2, DataTypeDateV2)     \
     FUNCTION_DATEV2_WITH_TWO_ARGS(NAME, IMPL, DataTypeDateV2, DataTypeDateTimeV2)     \
-    FUNCTION_DATEV2_WITH_TWO_ARGS(NAME, IMPL, DataTypeDateTimeV2, DataTypeDateTime)   \
-    FUNCTION_DATEV2_WITH_TWO_ARGS(NAME, IMPL, DataTypeDateTime, DataTypeDateTimeV2)   \
-    FUNCTION_DATEV2_WITH_TWO_ARGS(NAME, IMPL, DataTypeDateTime, DataTypeDateV2)       \
-    FUNCTION_DATEV2_WITH_TWO_ARGS(NAME, IMPL, DataTypeDateV2, DataTypeDateTime)       \
     FUNCTION_DATEV2_WITH_TWO_ARGS(NAME, IMPL, DataTypeDateV2, DataTypeDateV2)
-
+// these diff functions accept all v2 types. but for v1 only datetime.
 ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2DateDiff, DateDiffImpl)
 ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2TimeDiff, TimeDiffImpl)
 ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2YearsDiff, YearsDiffImpl)
 ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2MonthsDiff, MonthsDiffImpl)
 ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2WeeksDiff, WeeksDiffImpl)
 ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2HoursDiff, HoursDiffImpl)
-ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2MinutesDiff, MintueSDiffImpl)
+ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2MinutesDiff, MintuesDiffImpl)
 ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2SecondsDiff, SecondsDiffImpl)
 ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2DaysDiff, DaysDiffImpl)
+ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2MilliSecondsDiff, MilliSecondsDiffImpl)
+ALL_FUNCTION_DATEV2_WITH_TWO_ARGS(FunctionDatetimeV2MicroSecondsDiff, MicroSecondsDiffImpl)
 
 using FunctionDatetimeV2ToYearWeekTwoArgs =
         FunctionDateOrDateTimeComputation<ToYearWeekTwoArgsImpl<DataTypeDateTimeV2>>;
@@ -121,6 +124,7 @@ void register_function_date_time_computation_v2(SimpleFunctionFactory& factory) 
     factory.register_function<FunctionAddQuartersV2>();
 
     factory.register_function<FunctionDatetimeV2AddMicroseconds>();
+    factory.register_function<FunctionDatetimeV2AddMilliseconds>();
     factory.register_function<FunctionDatetimeV2AddSeconds>();
     factory.register_function<FunctionDatetimeV2AddMinutes>();
     factory.register_function<FunctionDatetimeV2AddHours>();
@@ -140,6 +144,7 @@ void register_function_date_time_computation_v2(SimpleFunctionFactory& factory) 
     factory.register_function<FunctionSubWeeksV2>();
 
     factory.register_function<FunctionDatetimeV2SubMicroseconds>();
+    factory.register_function<FunctionDatetimeV2SubMilliseconds>();
     factory.register_function<FunctionDatetimeV2SubSeconds>();
     factory.register_function<FunctionDatetimeV2SubMinutes>();
     factory.register_function<FunctionDatetimeV2SubHours>();
@@ -156,11 +161,7 @@ void register_function_date_time_computation_v2(SimpleFunctionFactory& factory) 
     REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateTimeV2, DataTypeDateTimeV2) \
     REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateTimeV2, DataTypeDateV2)     \
     REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateV2, DataTypeDateTimeV2)     \
-    REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateTimeV2, DataTypeDateTime)   \
-    REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateV2, DataTypeDateTime)       \
-    REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateV2, DataTypeDateV2)         \
-    REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateTime, DataTypeDateV2)       \
-    REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateTime, DataTypeDateTimeV2)
+    REGISTER_DATEV2_FUNCTIONS_WITH_TWO_ARGS(NAME, DataTypeDateV2, DataTypeDateV2)
 
     REGISTER_ALL_DATEV2_FUNCTIONS_WITH_TWO_ARGS(FunctionDatetimeV2DateDiff)
     REGISTER_ALL_DATEV2_FUNCTIONS_WITH_TWO_ARGS(FunctionDatetimeV2TimeDiff)
@@ -171,6 +172,8 @@ void register_function_date_time_computation_v2(SimpleFunctionFactory& factory) 
     REGISTER_ALL_DATEV2_FUNCTIONS_WITH_TWO_ARGS(FunctionDatetimeV2MinutesDiff)
     REGISTER_ALL_DATEV2_FUNCTIONS_WITH_TWO_ARGS(FunctionDatetimeV2SecondsDiff)
     REGISTER_ALL_DATEV2_FUNCTIONS_WITH_TWO_ARGS(FunctionDatetimeV2DaysDiff)
+    REGISTER_ALL_DATEV2_FUNCTIONS_WITH_TWO_ARGS(FunctionDatetimeV2MilliSecondsDiff)
+    REGISTER_ALL_DATEV2_FUNCTIONS_WITH_TWO_ARGS(FunctionDatetimeV2MicroSecondsDiff)
 
     factory.register_function<FunctionToYearWeekTwoArgsV2>();
     factory.register_function<FunctionToWeekTwoArgsV2>();

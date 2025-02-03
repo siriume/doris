@@ -28,7 +28,6 @@ import org.apache.doris.nereids.util.PlanChecker;
 import org.apache.doris.nereids.util.PlanConstructor;
 
 import com.google.common.collect.ImmutableList;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 class InnerJoinRightAssociateProjectTest implements MemoPatternMatchSupported {
@@ -37,18 +36,18 @@ class InnerJoinRightAssociateProjectTest implements MemoPatternMatchSupported {
     private final LogicalOlapScan scan3 = PlanConstructor.newLogicalOlapScan(2, "t3", 0);
 
     @Test
-    @Disabled
     void testSimple() {
         LogicalPlan plan = new LogicalPlanBuilder(scan1)
                 .join(scan2, JoinType.INNER_JOIN, Pair.of(0, 0))
                 .project(ImmutableList.of(0, 2))
                 .join(scan3, JoinType.INNER_JOIN, Pair.of(1, 0))
+                .projectAll()
                 .build();
 
         PlanChecker.from(MemoTestUtils.createConnectContext(), plan)
                 .applyExploration(InnerJoinRightAssociateProject.INSTANCE.build())
                 .matchesExploration(
-                        logicalJoin(
+                        logicalProject(logicalJoin(
                                 logicalProject(
                                         logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1"))),
                                 logicalProject(
@@ -57,7 +56,7 @@ class InnerJoinRightAssociateProjectTest implements MemoPatternMatchSupported {
                                                 logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
                                         )
                                 )
-                        )
+                        ))
                 );
     }
 

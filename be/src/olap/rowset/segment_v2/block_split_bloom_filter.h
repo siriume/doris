@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #include "olap/rowset/segment_v2/bloom_filter.h"
 
 namespace doris {
@@ -32,7 +34,6 @@ public:
     void add_hash(uint64_t hash) override;
 
     bool test_hash(uint64_t hash) const override;
-    bool contains(const BloomFilter&) const override { return true; }
 
 private:
     // Bytes in a tiny Bloom filter block.

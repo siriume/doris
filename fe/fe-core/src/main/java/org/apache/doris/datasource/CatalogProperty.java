@@ -18,11 +18,10 @@
 package org.apache.doris.datasource;
 
 import org.apache.doris.catalog.Env;
-import org.apache.doris.catalog.HMSResource;
 import org.apache.doris.catalog.Resource;
-import org.apache.doris.catalog.S3Resource;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
+import org.apache.doris.datasource.property.PropertyConverter;
 import org.apache.doris.persist.gson.GsonUtils;
 
 import com.google.common.base.Strings;
@@ -35,6 +34,7 @@ import org.apache.logging.log4j.Logger;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -61,7 +61,7 @@ public class CatalogProperty implements Writable {
     }
 
     private Resource catalogResource() {
-        if (catalogResource == null) {
+        if (!Strings.isNullOrEmpty(resource) && catalogResource == null) {
             synchronized (this) {
                 if (catalogResource == null) {
                     catalogResource = Env.getCurrentEnv().getResourceMgr().getResource(resource);
@@ -87,25 +87,36 @@ public class CatalogProperty implements Writable {
     public Map<String, String> getProperties() {
         Map<String, String> mergedProperties = Maps.newHashMap();
         if (!Strings.isNullOrEmpty(resource)) {
-            mergedProperties = catalogResource().getCopiedProperties();
+            Resource res = catalogResource();
+            if (res != null) {
+                mergedProperties = res.getCopiedProperties();
+            }
         }
         mergedProperties.putAll(properties);
         return mergedProperties;
     }
 
     public void modifyCatalogProps(Map<String, String> props) {
-        props = HMSResource.getPropertiesFromGlue(props);
-        properties.putAll(props);
+        properties.putAll(PropertyConverter.convertToMetaProperties(props));
     }
 
-    public Map<String, String> getS3HadoopProperties() {
-        return S3Resource.getS3HadoopProperties(getProperties());
+    public void rollBackCatalogProps(Map<String, String> props) {
+        properties.clear();
+        properties = new HashMap<>(props);
     }
 
     public Map<String, String> getHadoopProperties() {
         Map<String, String> hadoopProperties = getProperties();
-        hadoopProperties.putAll(getS3HadoopProperties());
+        hadoopProperties.putAll(PropertyConverter.convertToHadoopFSProperties(getProperties()));
         return hadoopProperties;
+    }
+
+    public void addProperty(String key, String val) {
+        this.properties.put(key, val);
+    }
+
+    public void deleteProperty(String key) {
+        this.properties.remove(key);
     }
 
     @Override

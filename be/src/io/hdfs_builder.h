@@ -17,10 +17,15 @@
 
 #pragma once
 
-#include <hdfs/hdfs.h>
+#include <gen_cpp/PlanNodes_types.h>
+
+#include <map>
+#include <string>
 
 #include "common/status.h"
-#include "gen_cpp/PlanNodes_types.h"
+#include "io/fs/hdfs.h" // IWYU pragma: keep
+
+struct hdfsBuilder;
 
 namespace doris {
 
@@ -31,36 +36,40 @@ const std::string KERBEROS_KEYTAB = "hadoop.kerberos.keytab";
 const std::string TICKET_CACHE_PATH = "/tmp/krb5cc_doris_";
 
 class HDFSCommonBuilder {
-    friend Status createHDFSBuilder(const THdfsParams& hdfsParams, HDFSCommonBuilder* builder);
-    friend Status createHDFSBuilder(const std::map<std::string, std::string>& properties,
-                                    HDFSCommonBuilder* builder);
+    friend Status create_hdfs_builder(const THdfsParams& hdfsParams, const std::string& fs_name,
+                                      HDFSCommonBuilder* builder);
+    friend Status create_hdfs_builder(const std::map<std::string, std::string>& properties,
+                                      HDFSCommonBuilder* builder);
 
 public:
     HDFSCommonBuilder() {}
     ~HDFSCommonBuilder() {
+#ifdef USE_LIBHDFS3
+        // for hadoop hdfs, the hdfs_builder will be freed in hdfsConnect
         if (hdfs_builder != nullptr) {
             hdfsFreeBuilder(hdfs_builder);
         }
+#endif
     }
 
     // Must call this to init hdfs_builder first.
     Status init_hdfs_builder();
 
     hdfsBuilder* get() { return hdfs_builder; }
-    bool is_need_kinit() const { return need_kinit; }
-    Status run_kinit();
+    bool is_kerberos() const { return kerberos_login; }
+    Status check_krb_params();
 
 private:
-    hdfsBuilder* hdfs_builder;
-    bool need_kinit {false};
+    hdfsBuilder* hdfs_builder = nullptr;
+    bool kerberos_login {false};
     std::string hdfs_kerberos_keytab;
     std::string hdfs_kerberos_principal;
 };
 
 THdfsParams parse_properties(const std::map<std::string, std::string>& properties);
 
-Status createHDFSBuilder(const THdfsParams& hdfsParams, HDFSCommonBuilder* builder);
-Status createHDFSBuilder(const std::map<std::string, std::string>& properties,
-                         HDFSCommonBuilder* builder);
+Status create_hdfs_builder(const THdfsParams& hdfsParams, HDFSCommonBuilder* builder);
+Status create_hdfs_builder(const std::map<std::string, std::string>& properties,
+                           HDFSCommonBuilder* builder);
 
 } // namespace doris

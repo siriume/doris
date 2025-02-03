@@ -17,29 +17,30 @@
 
 package org.apache.doris.qe;
 
-import org.apache.doris.analysis.ExportStmt;
 import org.apache.doris.analysis.SetStmt;
+import org.apache.doris.analysis.ShowVariablesStmt;
+import org.apache.doris.common.CaseSensibility;
+import org.apache.doris.common.DdlException;
+import org.apache.doris.common.ExceptionChecker;
 import org.apache.doris.common.FeConstants;
-import org.apache.doris.common.util.ProfileManager;
-import org.apache.doris.common.util.RuntimeProfile;
-import org.apache.doris.load.ExportJob;
-import org.apache.doris.task.ExportExportingTask;
+import org.apache.doris.common.PatternMatcher;
+import org.apache.doris.common.PatternMatcherWrapper;
+import org.apache.doris.common.VariableAnnotation;
+import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.thrift.TQueryOptions;
 import org.apache.doris.utframe.TestWithFeService;
 
-import com.google.common.collect.Lists;
-import mockit.Expectations;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
 
 public class SessionVariablesTest extends TestWithFeService {
 
     private SessionVariable sessionVariable;
     private int numOfForwardVars;
-    private ProfileManager profileManager = ProfileManager.getInstance();
 
     @Override
     protected void runBeforeAll() throws Exception {
@@ -61,6 +62,75 @@ public class SessionVariablesTest extends TestWithFeService {
     }
 
     @Test
+    public void testExperimentalSessionVariables() throws Exception {
+        connectContext.setThreadLocalInfo();
+        // 1. set without experimental
+        SessionVariable sessionVar = connectContext.getSessionVariable();
+        boolean enableShareScan = sessionVar.getEnableSharedScan();
+        String sql = "set enable_shared_scan=" + (enableShareScan ? "false" : "true");
+        SetStmt setStmt = (SetStmt) parseAndAnalyzeStmt(sql, connectContext);
+        SetExecutor setExecutor = new SetExecutor(connectContext, setStmt);
+        setExecutor.execute();
+        Assertions.assertNotEquals(sessionVar.getEnableSharedScan(), enableShareScan);
+        // 2. set with experimental
+        enableShareScan = sessionVar.getEnableSharedScan();
+        sql = "set experimental_enable_shared_scan=" + (enableShareScan ? "false" : "true");
+        setStmt = (SetStmt) parseAndAnalyzeStmt(sql, connectContext);
+        setExecutor = new SetExecutor(connectContext, setStmt);
+        setExecutor.execute();
+        Assertions.assertNotEquals(sessionVar.getEnableSharedScan(), enableShareScan);
+        // 3. set global without experimental
+        enableShareScan = sessionVar.getEnableSharedScan();
+        sql = "set global enable_shared_scan=" + (enableShareScan ? "false" : "true");
+        setStmt = (SetStmt) parseAndAnalyzeStmt(sql, connectContext);
+        setExecutor = new SetExecutor(connectContext, setStmt);
+        setExecutor.execute();
+        Assertions.assertNotEquals(sessionVar.getEnableSharedScan(), enableShareScan);
+        // 4. set global with experimental
+        enableShareScan = sessionVar.getEnableSharedScan();
+        sql = "set global experimental_enable_shared_scan=" + (enableShareScan ? "false" : "true");
+        setStmt = (SetStmt) parseAndAnalyzeStmt(sql, connectContext);
+        setExecutor = new SetExecutor(connectContext, setStmt);
+        setExecutor.execute();
+        Assertions.assertNotEquals(sessionVar.getEnableSharedScan(), enableShareScan);
+
+        // 5. set experimental for EXPERIMENTAL_ONLINE var
+        boolean bucketShuffle = sessionVar.isEnableBucketShuffleJoin();
+        sql = "set global experimental_enable_bucket_shuffle_join=" + (bucketShuffle ? "false" : "true");
+        setStmt = (SetStmt) parseAndAnalyzeStmt(sql, connectContext);
+        setExecutor = new SetExecutor(connectContext, setStmt);
+        setExecutor.execute();
+        Assertions.assertNotEquals(sessionVar.isEnableBucketShuffleJoin(), bucketShuffle);
+
+        // 6. set non experimental for EXPERIMENTAL_ONLINE var
+        bucketShuffle = sessionVar.isEnableBucketShuffleJoin();
+        sql = "set global enable_bucket_shuffle_join=" + (bucketShuffle ? "false" : "true");
+        setStmt = (SetStmt) parseAndAnalyzeStmt(sql, connectContext);
+        setExecutor = new SetExecutor(connectContext, setStmt);
+        setExecutor.execute();
+        Assertions.assertNotEquals(sessionVar.isEnableBucketShuffleJoin(), bucketShuffle);
+
+        // 4. set experimental for none experimental var
+        sql = "set experimental_group_concat_max_len=5";
+        setStmt = (SetStmt) parseAndAnalyzeStmt(sql, connectContext);
+        SetExecutor setExecutor2 = new SetExecutor(connectContext, setStmt);
+        ExceptionChecker.expectThrowsWithMsg(DdlException.class, "Unknown system variable",
+                setExecutor2::execute);
+
+        // 5. show variables
+        String showSql = "show variables like '%experimental%'";
+        ShowVariablesStmt showStmt = (ShowVariablesStmt) parseAndAnalyzeStmt(showSql, connectContext);
+        PatternMatcher matcher = null;
+        if (showStmt.getPattern() != null) {
+            matcher = PatternMatcherWrapper.createMysqlPattern(showStmt.getPattern(),
+                    CaseSensibility.VARIABLES.getCaseSensibility());
+        }
+        int num = sessionVar.getVariableNumByVariableAnnotation(VariableAnnotation.EXPERIMENTAL);
+        List<List<String>> result = VariableMgr.dump(showStmt.getType(), sessionVar, matcher);
+        Assertions.assertEquals(num, result.size());
+    }
+
+    @Test
     public void testForwardSessionVariables() {
         Map<String, String> vars = sessionVariable.getForwardVariables();
         Assertions.assertTrue(numOfForwardVars >= 6);
@@ -68,7 +138,7 @@ public class SessionVariablesTest extends TestWithFeService {
 
         vars.put(SessionVariable.ENABLE_PROFILE, "true");
         sessionVariable.setForwardedSessionVariables(vars);
-        Assertions.assertEquals(true, sessionVariable.enableProfile);
+        Assertions.assertTrue(sessionVariable.enableProfile);
     }
 
     @Test
@@ -86,86 +156,21 @@ public class SessionVariablesTest extends TestWithFeService {
     }
 
     @Test
-    public void testEnableProfile() {
-        try {
-            SetStmt setStmt = (SetStmt) parseAndAnalyzeStmt("set enable_profile=true", connectContext);
-            SetExecutor setExecutor = new SetExecutor(connectContext, setStmt);
-            setExecutor.execute();
+    public void testCloneSessionVariablesWithSessionOriginValueNotEmpty() throws NoSuchFieldException {
+        Field txIsolation = SessionVariable.class.getField("txIsolation");
+        SessionVariableField txIsolationSessionVariableField = new SessionVariableField(txIsolation);
+        sessionVariable.addSessionOriginValue(txIsolationSessionVariableField, "test");
 
-            ExportStmt exportStmt = (ExportStmt)
-                    parseAndAnalyzeStmt("EXPORT TABLE test_d.test_t1 TO \"file:///tmp/test_t1\"", connectContext);
-            ExportJob job = new ExportJob(1234);
-            job.setJob(exportStmt);
+        SessionVariable sessionVariableClone = VariableMgr.cloneSessionVariable(sessionVariable);
 
-            new Expectations(job) {
-                {
-                    job.getState();
-                    minTimes = 0;
-                    result = ExportJob.JobState.EXPORTING;
-
-                    job.getCoordList();
-                    minTimes = 0;
-                    result = Lists.newArrayList();
-                }
-            };
-
-            new Expectations(profileManager) {
-                {
-                    profileManager.pushProfile((RuntimeProfile) any);
-                    // if enable_profile=true, method pushProfile will be called once
-                    times = 1;
-                }
-            };
-
-            ExportExportingTask task = new ExportExportingTask(job);
-            task.run();
-            Assertions.assertTrue(job.isFinalState());
-        } catch (Exception e) {
-            e.printStackTrace();
-            Assertions.fail(e.getMessage());
-        }
-
+        Assertions.assertEquals("test",
+                sessionVariableClone.getSessionOriginValue().get(txIsolationSessionVariableField));
     }
 
     @Test
-    public void testDisableProfile() {
-        try {
-            SetStmt setStmt = (SetStmt) parseAndAnalyzeStmt("set enable_profile=false", connectContext);
-            SetExecutor setExecutor = new SetExecutor(connectContext, setStmt);
-            setExecutor.execute();
-
-            ExportStmt exportStmt = (ExportStmt)
-                    parseAndAnalyzeStmt("EXPORT TABLE test_d.test_t1 TO \"file:///tmp/test_t1\"", connectContext);
-            ExportJob job = new ExportJob(1234);
-            job.setJob(exportStmt);
-
-            new Expectations(job) {
-                {
-                    job.getState();
-                    minTimes = 0;
-                    result = ExportJob.JobState.EXPORTING;
-
-                    job.getCoordList();
-                    minTimes = 0;
-                    result = Lists.newArrayList();
-                }
-            };
-
-            new Expectations(profileManager) {
-                {
-                    profileManager.pushProfile((RuntimeProfile) any);
-                    // if enable_profile=false, method pushProfile will not be called
-                    times = 0;
-                }
-            };
-
-            ExportExportingTask task = new ExportExportingTask(job);
-            task.run();
-            Assertions.assertTrue(job.isFinalState());
-        } catch (Exception e) {
-            e.printStackTrace();
-            Assertions.fail(e.getMessage());
-        }
-
+    public void testSetVarInHint() {
+        String sql = "insert into test_t1 select /*+ set_var(enable_nereids_dml_with_pipeline=false)*/ * from test_t1 where enable_nereids_dml_with_pipeline=true";
+        new NereidsParser().parseSQL(sql);
+        Assertions.assertEquals(false, connectContext.getSessionVariable().enableNereidsDmlWithPipeline);
     }
 }

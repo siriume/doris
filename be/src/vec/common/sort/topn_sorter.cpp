@@ -17,6 +17,26 @@
 
 #include "vec/common/sort/topn_sorter.h"
 
+#include <glog/logging.h>
+
+#include <algorithm>
+#include <queue>
+
+#include "common/object_pool.h"
+#include "vec/core/block.h"
+#include "vec/core/sort_cursor.h"
+#include "vec/utils/util.hpp"
+
+namespace doris {
+class RowDescriptor;
+class RuntimeProfile;
+class RuntimeState;
+
+namespace vectorized {
+class VSortExecExprs;
+} // namespace vectorized
+} // namespace doris
+
 namespace doris::vectorized {
 
 TopNSorter::TopNSorter(VSortExecExprs& vsort_exec_exprs, int limit, int64_t offset,
@@ -24,8 +44,7 @@ TopNSorter::TopNSorter(VSortExecExprs& vsort_exec_exprs, int limit, int64_t offs
                        std::vector<bool>& nulls_first, const RowDescriptor& row_desc,
                        RuntimeState* state, RuntimeProfile* profile)
         : Sorter(vsort_exec_exprs, limit, offset, pool, is_asc_order, nulls_first),
-          _state(std::unique_ptr<MergeSorterState>(
-                  new MergeSorterState(row_desc, offset, limit, state, profile))),
+          _state(MergeSorterState::create_unique(row_desc, offset, limit, state, profile)),
           _row_desc(row_desc) {}
 
 Status TopNSorter::append_block(Block* block) {
@@ -39,7 +58,7 @@ Status TopNSorter::prepare_for_read() {
 }
 
 Status TopNSorter::get_next(RuntimeState* state, Block* block, bool* eos) {
-    return _state->merge_sort_read(state, block, eos);
+    return _state->merge_sort_read(block, state->batch_size(), eos);
 }
 
 Status TopNSorter::_do_sort(Block* block) {
@@ -53,28 +72,16 @@ Status TopNSorter::_do_sort(Block* block) {
         // if one block totally greater the heap top of _block_priority_queue
         // we can throw the block data directly.
         if (_state->num_rows() < _offset + _limit) {
-            _state->add_sorted_block(sorted_block);
-            // if it's spilled, sorted_block is not added into sorted block vector,
-            // so it's should not be added to _block_priority_queue, since
-            // sorted_block will be destroyed when _do_sort is finished
-            if (!_state->is_spilled()) {
-                _block_priority_queue.emplace(_pool->add(
-                        new MergeSortCursorImpl(_state->last_sorted_block(), _sort_description)));
-            }
+            _state->add_sorted_block(Block::create_shared(std::move(sorted_block)));
+            _block_priority_queue.emplace(MergeSortCursorImpl::create_shared(
+                    _state->last_sorted_block(), _sort_description));
         } else {
-            if (!_state->is_spilled()) {
-                auto tmp_cursor_impl =
-                        std::make_unique<MergeSortCursorImpl>(sorted_block, _sort_description);
-                MergeSortBlockCursor block_cursor(tmp_cursor_impl.get());
-                if (!block_cursor.totally_greater(_block_priority_queue.top())) {
-                    _state->add_sorted_block(sorted_block);
-                    if (!_state->is_spilled()) {
-                        _block_priority_queue.emplace(_pool->add(new MergeSortCursorImpl(
-                                _state->last_sorted_block(), _sort_description)));
-                    }
-                }
-            } else {
-                _state->add_sorted_block(sorted_block);
+            auto tmp_cursor_impl = MergeSortCursorImpl::create_shared(
+                    Block::create_shared(std::move(sorted_block)), _sort_description);
+            MergeSortBlockCursor block_cursor(tmp_cursor_impl);
+            if (!block_cursor.totally_greater(_block_priority_queue.top())) {
+                _state->add_sorted_block(block_cursor.impl->block);
+                _block_priority_queue.emplace(tmp_cursor_impl);
             }
         }
     } else {

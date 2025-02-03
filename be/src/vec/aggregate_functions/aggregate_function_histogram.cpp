@@ -17,10 +17,18 @@
 
 #include "vec/aggregate_functions/aggregate_function_histogram.h"
 
+#include <fmt/format.h>
+#include <glog/logging.h>
+
+#include <algorithm>
+
 #include "vec/aggregate_functions/helpers.h"
 #include "vec/core/types.h"
+#include "vec/data_types/data_type.h"
+#include "vec/data_types/data_type_nullable.h"
 
 namespace doris::vectorized {
+#include "common/compile_check_begin.h"
 
 template <typename T>
 AggregateFunctionPtr create_agg_function_histogram(const DataTypes& argument_types,
@@ -40,7 +48,8 @@ AggregateFunctionPtr create_agg_function_histogram(const DataTypes& argument_typ
 
 AggregateFunctionPtr create_aggregate_function_histogram(const std::string& name,
                                                          const DataTypes& argument_types,
-                                                         const bool result_is_nullable) {
+                                                         const bool result_is_nullable,
+                                                         const AggregateFunctionAttr& attr) {
     WhichDataType type(remove_nullable(argument_types[0]));
 
 #define DISPATCH(TYPE)               \

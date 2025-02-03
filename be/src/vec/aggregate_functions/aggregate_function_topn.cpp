@@ -15,15 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <vec/aggregate_functions/aggregate_function_topn.h>
+#include "vec/aggregate_functions/aggregate_function_topn.h"
+
+#include <fmt/format.h>
+#include <glog/logging.h>
 
 #include "vec/aggregate_functions/helpers.h"
 #include "vec/core/types.h"
+#include "vec/data_types/data_type.h"
+
 namespace doris::vectorized {
+#include "common/compile_check_begin.h"
 
 AggregateFunctionPtr create_aggregate_function_topn(const std::string& name,
                                                     const DataTypes& argument_types,
-                                                    const bool result_is_nullable) {
+                                                    const bool result_is_nullable,
+                                                    const AggregateFunctionAttr& attr) {
     if (argument_types.size() == 2) {
         return creator_without_type::create<AggregateFunctionTopN<AggregateFunctionTopNImplInt>>(
                 argument_types, result_is_nullable);
@@ -77,7 +84,8 @@ AggregateFunctionPtr create_topn_array(const DataTypes& argument_types,
 
 AggregateFunctionPtr create_aggregate_function_topn_array(const std::string& name,
                                                           const DataTypes& argument_types,
-                                                          const bool result_is_nullable) {
+                                                          const bool result_is_nullable,
+                                                          const AggregateFunctionAttr& attr) {
     bool has_default_param = (argument_types.size() == 3);
     if (has_default_param) {
         return create_topn_array<AggregateFunctionTopNImplArray, true, false>(argument_types,
@@ -90,7 +98,8 @@ AggregateFunctionPtr create_aggregate_function_topn_array(const std::string& nam
 
 AggregateFunctionPtr create_aggregate_function_topn_weighted(const std::string& name,
                                                              const DataTypes& argument_types,
-                                                             const bool result_is_nullable) {
+                                                             const bool result_is_nullable,
+                                                             const AggregateFunctionAttr& attr) {
     bool has_default_param = (argument_types.size() == 4);
     if (has_default_param) {
         return create_topn_array<AggregateFunctionTopNImplWeight, true, true>(argument_types,

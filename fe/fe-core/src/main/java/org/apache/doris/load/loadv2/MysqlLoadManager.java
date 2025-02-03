@@ -19,17 +19,20 @@ package org.apache.doris.load.loadv2;
 
 import org.apache.doris.analysis.DataDescription;
 import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.InsertStmt;
 import org.apache.doris.analysis.LoadStmt;
 import org.apache.doris.analysis.SetVar;
 import org.apache.doris.analysis.StringLiteral;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.CustomThreadFactory;
 import org.apache.doris.common.LoadException;
 import org.apache.doris.common.ThreadPoolManager;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.io.ByteBufferNetworkInputStream;
 import org.apache.doris.load.LoadJobRowResult;
+import org.apache.doris.load.StreamLoadHandler;
 import org.apache.doris.mysql.MysqlSerializer;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.SessionVariable;
@@ -39,6 +42,9 @@ import org.apache.doris.system.BeSelectionPolicy;
 import org.apache.doris.system.SystemInfoService;
 
 import com.google.common.base.Joiner;
+import com.google.common.base.Strings;
+import com.google.common.collect.EvictingQueue;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -59,14 +65,17 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class MysqlLoadManager {
     private static final Logger LOG = LogManager.getLogger(MysqlLoadManager.class);
 
-    private final ThreadPoolExecutor mysqlLoadPool;
-    private final TokenManager tokenManager;
+    private  ThreadPoolExecutor mysqlLoadPool;
 
     private static class MySqlLoadContext {
         private boolean finished;
@@ -103,21 +112,58 @@ public class MysqlLoadManager {
         }
     }
 
+    private static class MySqlLoadFailRecord {
+        private final String label;
+
+        private final String errorUrl;
+        private final long startTime;
+
+        public MySqlLoadFailRecord(String label, String errorUrl) {
+            this.label = label;
+            this.errorUrl = errorUrl;
+            this.startTime = System.currentTimeMillis();
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public String getErrorUrl() {
+            return errorUrl;
+        }
+
+        public boolean isExpired() {
+            // hard code the expired value for one day.
+            return System.currentTimeMillis() > startTime + 24 * 60 * 60 * 1000;
+        }
+    }
+
     private final Map<String, MySqlLoadContext> loadContextMap = new ConcurrentHashMap<>();
+    private  EvictingQueue<MySqlLoadFailRecord> failedRecords;
+    private ScheduledExecutorService periodScheduler;
 
+    public MysqlLoadManager() {
+    }
 
-    public MysqlLoadManager(TokenManager tokenManager) {
+    public void start() {
+        this.periodScheduler = Executors.newScheduledThreadPool(1,
+                new CustomThreadFactory("mysql-load-fail-record-cleaner"));
         int poolSize = Config.mysql_load_thread_pool;
         // MySqlLoad pool can accept 4 + 4 * 5 = 24  requests by default.
-        this.mysqlLoadPool = ThreadPoolManager.newDaemonFixedThreadPool(poolSize, poolSize * 5, "Mysql Load", true);
-        this.tokenManager = tokenManager;
+        this.mysqlLoadPool = ThreadPoolManager.newDaemonFixedThreadPool(poolSize, poolSize * 5,
+                "Mysql Load", true);
+        this.failedRecords = EvictingQueue.create(Config.mysql_load_in_memory_record);
+        this.periodScheduler.scheduleAtFixedRate(this::cleanFailedRecords, 1, 24, TimeUnit.HOURS);
     }
 
     public LoadJobRowResult executeMySqlLoadJobFromStmt(ConnectContext context, LoadStmt stmt, String loadId)
             throws IOException, UserException {
+        return executeMySqlLoadJobFromStmt(context, stmt.getDataDescriptions().get(0), loadId);
+    }
+
+    public LoadJobRowResult executeMySqlLoadJobFromStmt(ConnectContext context, DataDescription dataDesc, String loadId)
+            throws IOException, UserException {
         LoadJobRowResult loadResult = new LoadJobRowResult();
-        // Mysql data load only have one data desc
-        DataDescription dataDesc = stmt.getDataDescriptions().get(0);
         List<String> filePaths = dataDesc.getFilePaths();
         String database = ClusterNamespace.getNameFromFullName(dataDesc.getDbName());
         String table = dataDesc.getTableName();
@@ -130,37 +176,44 @@ public class MysqlLoadManager {
             VariableMgr.setVar(sessionVariable,
                     new SetVar(SessionVariable.QUERY_TIMEOUT, new StringLiteral(String.valueOf(newTimeOut))));
         }
-        String token = tokenManager.acquireToken();
-        LOG.info("execute MySqlLoadJob for id: {}.", loadId);
+        String token = Env.getCurrentEnv().getTokenManager().acquireToken();
+        boolean clientLocal = dataDesc.isClientLocal();
+        MySqlLoadContext loadContext = new MySqlLoadContext();
+        loadContextMap.put(loadId, loadContext);
+        LOG.info("Executing mysql load with id: {}.", loadId);
         try (final CloseableHttpClient httpclient = HttpClients.createDefault()) {
             for (String file : filePaths) {
-                InputStreamEntity entity = getInputStreamEntity(context, dataDesc.isClientLocal(), file, loadId);
+                InputStreamEntity entity = getInputStreamEntity(context, clientLocal, file, loadId);
                 HttpPut request = generateRequestForMySqlLoad(entity, dataDesc, database, table, token);
-                MySqlLoadContext loadContext = new MySqlLoadContext();
                 loadContext.setRequest(request);
-                loadContextMap.put(loadId, loadContext);
                 try (final CloseableHttpResponse response = httpclient.execute(request)) {
                     String body = EntityUtils.toString(response.getEntity());
                     JsonObject result = JsonParser.parseString(body).getAsJsonObject();
                     if (!result.get("Status").getAsString().equalsIgnoreCase("Success")) {
-                        LOG.warn("Execute mysql data load failed with request: {} and response: {}", request, body);
-                        throw new LoadException(result.get("Message").getAsString());
+                        String errorUrl = Optional.ofNullable(result.get("ErrorURL"))
+                                .map(JsonElement::getAsString).orElse("");
+                        failedRecords.offer(new MySqlLoadFailRecord(loadId, errorUrl));
+                        LOG.warn("Execute mysql load failed with request: {} and response: {}, job id: {}",
+                                request, body, loadId);
+                        throw new LoadException(result.get("Message").getAsString() + " with load id " + loadId);
                     }
                     loadResult.incRecords(result.get("NumberLoadedRows").getAsLong());
                     loadResult.incSkipped(result.get("NumberFilteredRows").getAsInt());
                 }
             }
         } catch (Throwable t) {
-            LOG.warn("Execute mysql load {} failed", loadId, t);
+            LOG.warn("Execute mysql load {} failed, msg: {}", loadId, t);
             // drain the data from client conn util empty packet received, otherwise the connection will be reset
-            if (loadContextMap.containsKey(loadId) && !loadContextMap.get(loadId).isFinished()) {
-                LOG.warn("not drained yet, try reading left data from client connection for load {}.", loadId);
+            if (clientLocal && loadContextMap.containsKey(loadId) && !loadContextMap.get(loadId).isFinished()) {
+                LOG.warn("Not drained yet, try reading left data from client connection for load {}.", loadId);
                 ByteBuffer buffer = context.getMysqlChannel().fetchOnePacket();
                 // MySql client will send an empty packet when eof
                 while (buffer != null && buffer.limit() != 0) {
                     buffer = context.getMysqlChannel().fetchOnePacket();
                 }
-                LOG.debug("Finished reading the left bytes.");
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Finished reading the left bytes.");
+                }
             }
             // make cancel message to user
             if (loadContextMap.containsKey(loadId) && loadContextMap.get(loadId).isCancelled()) {
@@ -169,9 +222,15 @@ public class MysqlLoadManager {
                 throw t;
             }
         } finally {
+            LOG.info("Mysql load job {} finished, loaded records: {}", loadId, loadResult.getRecords());
             loadContextMap.remove(loadId);
         }
         return loadResult;
+    }
+
+    public LoadJobRowResult executeMySqlLoadJobFromStmt(ConnectContext context, InsertStmt insertStmt, String loadId)
+            throws UserException, IOException {
+        return executeMySqlLoadJobFromStmt(context, (DataDescription) insertStmt.getDataDescList().get(0), loadId);
     }
 
     public void cancelMySqlLoad(String loadId) {
@@ -184,7 +243,22 @@ public class MysqlLoadManager {
         }
     }
 
-    public int extractTimeOut(DataDescription desc) {
+    public String getErrorUrlByLoadId(String loadId) {
+        for (MySqlLoadFailRecord record : failedRecords) {
+            if (loadId.equals(record.getLabel())) {
+                return record.getErrorUrl();
+            }
+        }
+        return null;
+    }
+
+    private void cleanFailedRecords() {
+        while (!failedRecords.isEmpty() && failedRecords.peek().isExpired()) {
+            failedRecords.poll();
+        }
+    }
+
+    private int extractTimeOut(DataDescription desc) {
         if (desc.getProperties() != null && desc.getProperties().containsKey(LoadStmt.TIMEOUT_PROPERTY)) {
             return Integer.parseInt(desc.getProperties().get(LoadStmt.TIMEOUT_PROPERTY));
         }
@@ -309,6 +383,18 @@ public class MysqlLoadManager {
                 String trimQuotes = props.get(LoadStmt.KEY_TRIM_DOUBLE_QUOTES);
                 httpPut.addHeader(LoadStmt.KEY_TRIM_DOUBLE_QUOTES, trimQuotes);
             }
+
+            // enclose
+            if (props.containsKey(LoadStmt.KEY_ENCLOSE)) {
+                String enclose = props.get(LoadStmt.KEY_ENCLOSE);
+                httpPut.addHeader(LoadStmt.KEY_ENCLOSE, enclose);
+            }
+
+            //escape
+            if (props.containsKey(LoadStmt.KEY_ESCAPE)) {
+                String escape = props.get(LoadStmt.KEY_ESCAPE);
+                httpPut.addHeader(LoadStmt.KEY_ESCAPE, escape);
+            }
         }
 
         // skip_lines
@@ -342,24 +428,52 @@ public class MysqlLoadManager {
                 httpPut.addHeader(LoadStmt.KEY_IN_PARAM_PARTITIONS, pNames);
             }
         }
+
+        // cloud cluster
+        if (Config.isCloudMode()) {
+            String clusterName = "";
+            try {
+                clusterName = ConnectContext.get().getCloudCluster();
+            } catch (Exception e) {
+                LOG.warn("failed to get compute group: " + e.getMessage());
+                throw new LoadException("failed to get compute group: " + e.getMessage());
+            }
+            if (Strings.isNullOrEmpty(clusterName)) {
+                throw new LoadException("cloud compute group is empty");
+            }
+            httpPut.addHeader(LoadStmt.KEY_CLOUD_CLUSTER, clusterName);
+        }
+
         httpPut.setEntity(entity);
         return httpPut;
     }
 
     private String selectBackendForMySqlLoad(String database, String table) throws LoadException {
-        BeSelectionPolicy policy = new BeSelectionPolicy.Builder().needLoadAvailable().build();
-        List<Long> backendIds = Env.getCurrentSystemInfo().selectBackendIdsByPolicy(policy, 1);
-        if (backendIds.isEmpty()) {
-            throw new LoadException(SystemInfoService.NO_BACKEND_LOAD_AVAILABLE_MSG + ", policy: " + policy);
+        Backend backend = null;
+        if (Config.isCloudMode()) {
+            String clusterName = "";
+            try {
+                clusterName = ConnectContext.get().getCloudCluster();
+            } catch (Exception e) {
+                LOG.warn("failed to get cloud cluster: " + e.getMessage());
+                throw new LoadException("failed to get cloud cluster: " + e);
+            }
+            backend = StreamLoadHandler.selectBackend(clusterName);
+        } else {
+            BeSelectionPolicy policy = new BeSelectionPolicy.Builder().needLoadAvailable().build();
+            List<Long> backendIds = Env.getCurrentSystemInfo().selectBackendIdsByPolicy(policy, 1);
+            if (backendIds.isEmpty()) {
+                throw new LoadException(SystemInfoService.NO_BACKEND_LOAD_AVAILABLE_MSG + ", policy: " + policy);
+            }
+            backend = Env.getCurrentSystemInfo().getBackend(backendIds.get(0));
+            if (backend == null) {
+                throw new LoadException(SystemInfoService.NO_BACKEND_LOAD_AVAILABLE_MSG + ", policy: " + policy);
+            }
         }
 
-        Backend backend = Env.getCurrentSystemInfo().getBackend(backendIds.get(0));
-        if (backend == null) {
-            throw new LoadException(SystemInfoService.NO_BACKEND_LOAD_AVAILABLE_MSG + ", policy: " + policy);
-        }
         StringBuilder sb = new StringBuilder();
         sb.append("http://");
-        sb.append(backend.getIp());
+        sb.append(backend.getHost());
         sb.append(":");
         sb.append(backend.getHttpPort());
         sb.append("/api/");

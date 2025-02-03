@@ -15,23 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <fmt/core.h>
+#include <glog/logging.h>
+
+#include <memory>
+#include <string>
+#include <utility>
 
 #include "common/status.h"
+#include "vec/aggregate_functions/aggregate_function.h"
 #include "vec/columns/column.h"
 #include "vec/columns/column_array.h"
+#include "vec/columns/column_nullable.h"
+#include "vec/columns/column_vector.h"
 #include "vec/columns/columns_number.h"
+#include "vec/common/assert_cast.h"
 #include "vec/core/block.h"
-#include "vec/data_types/data_type_array.h"
+#include "vec/core/column_numbers.h"
+#include "vec/core/column_with_type_and_name.h"
+#include "vec/data_types/data_type.h"
 #include "vec/exprs/lambda_function/lambda_function.h"
 #include "vec/exprs/lambda_function/lambda_function_factory.h"
-#include "vec/exprs/vexpr.h"
-#include "vec/exprs/vexpr_context.h"
 #include "vec/utils/util.hpp"
 
 namespace doris::vectorized {
+#include "common/compile_check_begin.h"
+class VExprContext;
 
 class ArrayFilterFunction : public LambdaFunction {
+    ENABLE_FACTORY_CREATOR(ArrayFilterFunction);
+
 public:
     ~ArrayFilterFunction() override = default;
 
@@ -42,8 +54,8 @@ public:
     std::string get_name() const override { return name; }
 
     doris::Status execute(VExprContext* context, doris::vectorized::Block* block,
-                          int* result_column_id, DataTypePtr result_type,
-                          const std::vector<VExpr*>& children) override {
+                          int* result_column_id, const DataTypePtr& result_type,
+                          const VExprSPtrs& children) override {
         ///* array_filter(array, array<boolean>) *///
 
         //1. child[0:end]->execute(src_block)
@@ -60,7 +72,7 @@ public:
         auto second_column =
                 block->get_by_position(arguments[1]).column->convert_to_full_column_if_const();
 
-        int input_rows = first_column->size();
+        auto input_rows = first_column->size();
         auto first_outside_null_map = ColumnUInt8::create(input_rows, 0);
         auto first_arg_column = first_column;
         if (first_arg_column->is_nullable()) {
@@ -71,7 +83,7 @@ public:
             VectorizedUtils::update_null_map(first_outside_null_map->get_data(),
                                              column_array_nullmap.get_data());
         }
-        const ColumnArray& first_col_array = assert_cast<const ColumnArray&>(*first_arg_column);
+        const auto& first_col_array = assert_cast<const ColumnArray&>(*first_arg_column);
         const auto& first_off_data =
                 assert_cast<const ColumnArray::ColumnOffsets&>(first_col_array.get_offsets_column())
                         .get_data();
@@ -95,7 +107,7 @@ public:
             VectorizedUtils::update_null_map(second_outside_null_map->get_data(),
                                              column_array_nullmap.get_data());
         }
-        const ColumnArray& second_col_array = assert_cast<const ColumnArray&>(*second_arg_column);
+        const auto& second_col_array = assert_cast<const ColumnArray&>(*second_arg_column);
         const auto& second_off_data = assert_cast<const ColumnArray::ColumnOffsets&>(
                                               second_col_array.get_offsets_column())
                                               .get_data();
@@ -162,4 +174,6 @@ public:
 void register_function_array_filter(doris::vectorized::LambdaFunctionFactory& factory) {
     factory.register_function<ArrayFilterFunction>();
 }
+
+#include "common/compile_check_end.h"
 } // namespace doris::vectorized

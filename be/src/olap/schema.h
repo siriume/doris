@@ -17,14 +17,24 @@
 
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "common/consts.h"
+#include "io/io_common.h"
 #include "olap/field.h"
-#include "olap/row_cursor_cell.h"
+#include "olap/olap_common.h"
 #include "olap/tablet_schema.h"
-#include "olap/types.h"
-#include "runtime/descriptors.h"
+#include "olap/utils.h"
+#include "runtime/thread_context.h"
+#include "vec/aggregate_functions/aggregate_function.h"
+#include "vec/columns/column.h"
 
 namespace doris {
 
@@ -35,17 +45,19 @@ namespace doris {
 //
 // To compare two rows whose schemas are different, but they are from the same origin
 // we store all column schema maybe accessed here. And default access through column id
+class Schema;
+using SchemaSPtr = std::shared_ptr<const Schema>;
 class Schema {
 public:
     Schema(TabletSchemaSPtr tablet_schema) {
         size_t num_columns = tablet_schema->num_columns();
         // ignore this column
-        if (tablet_schema->columns().back().name() == BeConsts::ROW_STORE_COL) {
+        if (tablet_schema->columns().back()->name() == BeConsts::ROW_STORE_COL) {
             --num_columns;
         }
         std::vector<ColumnId> col_ids(num_columns);
         _unique_ids.resize(num_columns);
-        std::vector<TabletColumn> columns;
+        std::vector<TabletColumnPtr> columns;
         columns.reserve(num_columns);
 
         size_t num_key_columns = 0;
@@ -62,7 +74,7 @@ public:
             if (column.name() == VERSION_COL) {
                 _version_col_idx = cid;
             }
-            columns.push_back(column);
+            columns.push_back(std::make_shared<TabletColumn>(column));
         }
         _delete_sign_idx = tablet_schema->delete_sign_idx();
         if (tablet_schema->has_sequence_col()) {
@@ -72,34 +84,34 @@ public:
     }
 
     // All the columns of one table may exist in the columns param, but col_ids is only a subset.
-    Schema(const std::vector<TabletColumn>& columns, const std::vector<ColumnId>& col_ids) {
+    Schema(const std::vector<TabletColumnPtr>& columns, const std::vector<ColumnId>& col_ids) {
         size_t num_key_columns = 0;
         _unique_ids.resize(columns.size());
         for (size_t i = 0; i < columns.size(); ++i) {
-            if (columns[i].is_key()) {
+            if (columns[i]->is_key()) {
                 ++num_key_columns;
             }
-            if (columns[i].name() == DELETE_SIGN) {
+            if (columns[i]->name() == DELETE_SIGN) {
                 _delete_sign_idx = i;
             }
-            if (columns[i].name() == BeConsts::ROWID_COL) {
+            if (columns[i]->name() == BeConsts::ROWID_COL) {
                 _rowid_col_idx = i;
             }
-            if (columns[i].name() == VERSION_COL) {
+            if (columns[i]->name() == VERSION_COL) {
                 _version_col_idx = i;
             }
-            _unique_ids[i] = columns[i].unique_id();
+            _unique_ids[i] = columns[i]->unique_id();
         }
         _init(columns, col_ids, num_key_columns);
     }
 
     // Only for UT
-    Schema(const std::vector<TabletColumn>& columns, size_t num_key_columns) {
+    Schema(const std::vector<TabletColumnPtr>& columns, size_t num_key_columns) {
         std::vector<ColumnId> col_ids(columns.size());
         _unique_ids.resize(columns.size());
         for (uint32_t cid = 0; cid < columns.size(); ++cid) {
             col_ids[cid] = cid;
-            _unique_ids[cid] = columns[cid].unique_id();
+            _unique_ids[cid] = columns[cid]->unique_id();
         }
 
         _init(columns, col_ids, num_key_columns);
@@ -131,8 +143,9 @@ public:
 
     static vectorized::IColumn::MutablePtr get_column_by_field(const Field& field);
 
-    static vectorized::IColumn::MutablePtr get_predicate_column_ptr(const Field& field,
-                                                                    bool is_nullable = false);
+    static vectorized::IColumn::MutablePtr get_predicate_column_ptr(const FieldType& type,
+                                                                    bool is_nullable,
+                                                                    const ReaderType reader_type);
 
     const std::vector<Field*>& columns() const { return _cols; }
 
@@ -164,9 +177,13 @@ public:
     bool has_sequence_col() const { return _has_sequence_col; }
     int32_t rowid_col_idx() const { return _rowid_col_idx; }
     int32_t version_col_idx() const { return _version_col_idx; }
+    // Don't use.
+    // TODO: memory size of Schema cannot be accurately tracked.
+    // In some places, temporarily use num_columns() as Schema size.
+    int64_t mem_size() const { return _mem_size; }
 
 private:
-    void _init(const std::vector<TabletColumn>& cols, const std::vector<ColumnId>& col_ids,
+    void _init(const std::vector<TabletColumnPtr>& cols, const std::vector<ColumnId>& col_ids,
                size_t num_key_columns);
     void _init(const std::vector<const Field*>& cols, const std::vector<ColumnId>& col_ids,
                size_t num_key_columns);
@@ -190,6 +207,7 @@ private:
     bool _has_sequence_col = false;
     int32_t _rowid_col_idx = -1;
     int32_t _version_col_idx = -1;
+    int64_t _mem_size = 0;
 };
 
 } // namespace doris

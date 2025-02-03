@@ -21,10 +21,13 @@ import org.apache.doris.catalog.ArrayType;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.common.AnalysisException;
-import org.apache.doris.common.Config;
 import org.apache.doris.common.ExceptionChecker;
 import org.apache.doris.common.util.SqlParserUtils;
+import org.apache.doris.nereids.StatementContext;
+import org.apache.doris.nereids.glue.LogicalPlanAdapter;
+import org.apache.doris.nereids.trees.plans.commands.UnsupportedCommand;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.OriginStatement;
 import org.apache.doris.qe.QueryState;
 import org.apache.doris.qe.QueryState.MysqlStateType;
 import org.apache.doris.qe.StmtExecutor;
@@ -114,7 +117,6 @@ public class InsertArrayStmtTest {
 
     @Test
     public void testTransactionalInsert() throws Exception {
-        Config.enable_new_load_scan_node = true;
         ExceptionChecker.expectThrowsNoException(
                 () -> createTable("CREATE TABLE test.`txn_insert_tbl` (\n"
                         + "  `k1` int(11) NULL,\n"
@@ -133,22 +135,20 @@ public class InsertArrayStmtTest {
                         + "\"disable_auto_compaction\" = \"false\"\n"
                         + ");"));
 
-        SqlParser parser = new SqlParser(new SqlScanner(
-                new StringReader("begin"), connectContext.getSessionVariable().getSqlMode()
-        ));
-        TransactionBeginStmt beginStmt = (TransactionBeginStmt) SqlParserUtils.getFirstStmt(parser);
-        StmtExecutor stmtExecutor = new StmtExecutor(connectContext, beginStmt);
+        OriginStatement originStatement = new OriginStatement("begin", 0);
+        StatementBase begin = new LogicalPlanAdapter(new UnsupportedCommand(),
+                new StatementContext(connectContext, originStatement));
+        begin.setOrigStmt(originStatement);
+        StmtExecutor stmtExecutor = new StmtExecutor(connectContext, begin);
         stmtExecutor.execute();
 
-        parser = new SqlParser(new SqlScanner(
-                new StringReader("insert into test.txn_insert_tbl values(2, 3.3, \"xyz\", [1], [1, 0]);"),
-                connectContext.getSessionVariable().getSqlMode()
-        ));
-        InsertStmt insertStmt = (InsertStmt) SqlParserUtils.getFirstStmt(parser);
-        stmtExecutor = new StmtExecutor(connectContext, insertStmt);
+        originStatement = new OriginStatement("insert into test.txn_insert_tbl values(2, 3.3, \"xyz\", [1], [1, 0]);", 0);
+        StatementBase insert = new LogicalPlanAdapter(new UnsupportedCommand(),
+                new StatementContext(connectContext, originStatement));
+        insert.setOrigStmt(originStatement);
+        stmtExecutor = new StmtExecutor(connectContext, insert);
         stmtExecutor.execute();
         QueryState state = connectContext.getState();
-        Assert.assertEquals(MysqlStateType.OK, state.getStateType());
+        Assert.assertEquals(state.getErrorMessage(), MysqlStateType.OK, state.getStateType());
     }
 }
-

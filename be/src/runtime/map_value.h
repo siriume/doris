@@ -17,9 +17,7 @@
 
 #pragma once
 
-#include <type_traits>
-
-#include "runtime/primitive_type.h"
+#include <stdint.h>
 
 namespace doris {
 
@@ -52,8 +50,8 @@ public:
 
 private:
     // child column data pointer
-    void* _key_data;
-    void* _value_data;
+    void* _key_data = nullptr;
+    void* _value_data = nullptr;
     // length for map size
     int32_t _length;
 

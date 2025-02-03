@@ -20,16 +20,32 @@
 
 #pragma once
 
-#include <exception>
-#include <optional>
+#include <gen_cpp/Types_types.h>
+#include <stddef.h>
+#include <stdint.h>
 
-#include "gen_cpp/data.pb.h"
-#include "util/stack_util.h"
-#include "vec/columns/column_array.h"
-#include "vec/columns/column_nullable.h"
-#include "vec/columns/column_struct.h"
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "common/status.h"
+#include "runtime/define_primitive_type.h"
+#include "vec/core/field.h"
+#include "vec/core/types.h"
 #include "vec/data_types/data_type.h"
-#include "vec/data_types/data_type_nullable.h"
+#include "vec/data_types/serde/data_type_serde.h"
+#include "vec/data_types/serde/data_type_struct_serde.h"
+
+namespace doris {
+class PColumnMeta;
+
+namespace vectorized {
+class BufferWritable;
+class IColumn;
+class ReadBuffer;
+} // namespace vectorized
+} // namespace doris
 
 namespace doris::vectorized {
 
@@ -56,29 +72,46 @@ public:
     DataTypeStruct(const DataTypes& elems, const Strings& names);
 
     TypeIndex get_type_id() const override { return TypeIndex::Struct; }
+    TypeDescriptor get_type_as_type_descriptor() const override {
+        TypeDescriptor desc(TYPE_STRUCT);
+        for (size_t i = 0; i < elems.size(); ++i) {
+            TypeDescriptor sub_desc = elems[i]->get_type_as_type_descriptor();
+            desc.field_names.push_back(names[i]);
+            desc.contains_nulls.push_back(elems[i]->is_nullable());
+            desc.add_sub_type(sub_desc);
+        }
+        return desc;
+    }
+
+    doris::FieldType get_storage_field_type() const override {
+        return doris::FieldType::OLAP_FIELD_TYPE_STRUCT;
+    }
     std::string do_get_name() const override;
     const char* get_family_name() const override { return "Struct"; }
 
-    bool can_be_inside_nullable() const override { return true; }
     bool supports_sparse_serialization() const { return true; }
 
     MutableColumnPtr create_column() const override;
 
     Field get_default() const override;
-    void insert_default_into(IColumn& column) const override;
+
+    Field get_field(const TExprNode& node) const override {
+        throw doris::Exception(ErrorCode::NOT_IMPLEMENTED_ERROR,
+                               "Unimplemented get_field for struct");
+        __builtin_unreachable();
+    }
 
     bool equals(const IDataType& rhs) const override;
 
-    bool get_is_parametric() const override { return true; }
     bool have_subtypes() const override { return !elems.empty(); }
     bool is_comparable() const override;
     bool text_can_contain_only_valid_utf8() const override;
     bool have_maximum_size_of_value() const override;
-    size_t get_maximum_size_of_value_in_memory() const override;
     size_t get_size_of_value_in_memory() const override;
 
     const DataTypePtr& get_element(size_t i) const { return elems[i]; }
     const DataTypes& get_elements() const { return elems; }
+    const String& get_element_name(size_t i) const { return names[i]; }
     const Strings& get_element_names() const { return names; }
 
     size_t get_position_by_name(const String& name) const;
@@ -88,13 +121,21 @@ public:
     int64_t get_uncompressed_serialized_bytes(const IColumn& column,
                                               int be_exec_version) const override;
     char* serialize(const IColumn& column, char* buf, int be_exec_version) const override;
-    const char* deserialize(const char* buf, IColumn* column, int be_exec_version) const override;
+    const char* deserialize(const char* buf, MutableColumnPtr* column,
+                            int be_exec_version) const override;
     void to_pb_column_meta(PColumnMeta* col_meta) const override;
 
     Status from_string(ReadBuffer& rb, IColumn* column) const override;
     std::string to_string(const IColumn& column, size_t row_num) const override;
     void to_string(const IColumn& column, size_t row_num, BufferWritable& ostr) const override;
     bool get_have_explicit_names() const { return have_explicit_names; }
+    DataTypeSerDeSPtr get_serde(int nesting_level = 1) const override {
+        DataTypeSerDeSPtrs ptrs;
+        for (auto iter = elems.begin(); iter < elems.end(); ++iter) {
+            ptrs.push_back((*iter)->get_serde(nesting_level + 1));
+        }
+        return std::make_shared<DataTypeStructSerDe>(ptrs, names, nesting_level);
+    };
 };
 
 } // namespace doris::vectorized

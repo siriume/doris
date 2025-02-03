@@ -15,17 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <gtest/gtest.h>
+#include <gen_cpp/segment_v2.pb.h>
+#include <gtest/gtest-message.h>
+#include <gtest/gtest-test-part.h>
+#include <stdint.h>
+#include <stdlib.h>
 
 #include <memory>
+#include <roaring/roaring.hh>
 #include <string>
+#include <utility>
 
-#include "common/logging.h"
-#include "io/fs/file_reader.h"
+#include "common/status.h"
+#include "gtest/gtest_pred_impl.h"
+#include "io/fs/file_reader_writer_fwd.h"
 #include "io/fs/file_system.h"
 #include "io/fs/file_writer.h"
 #include "io/fs/local_file_system.h"
-#include "olap/key_coder.h"
 #include "olap/olap_common.h"
 #include "olap/rowset/segment_v2/bitmap_index_reader.h"
 #include "olap/rowset/segment_v2/bitmap_index_writer.h"
@@ -44,7 +50,10 @@ public:
     const std::string kTestDir = "./ut_dir/bitmap_index_test";
 
     void SetUp() override {
-        EXPECT_TRUE(io::global_local_filesystem()->delete_and_create_directory(kTestDir).ok());
+        auto st = io::global_local_filesystem()->delete_directory(kTestDir);
+        ASSERT_TRUE(st.ok()) << st;
+        st = io::global_local_filesystem()->create_directory(kTestDir);
+        ASSERT_TRUE(st.ok()) << st;
     }
     void TearDown() override {
         EXPECT_TRUE(io::global_local_filesystem()->delete_directory(kTestDir).ok());
@@ -60,7 +69,7 @@ void write_index_file(const std::string& filename, FileSystemSPtr fs, const void
         EXPECT_TRUE(fs->create_file(filename, &file_writer).ok());
 
         std::unique_ptr<BitmapIndexWriter> writer;
-        BitmapIndexWriter::create(type_info, &writer);
+        static_cast<void>(BitmapIndexWriter::create(type_info, &writer));
         writer->add_values(values, value_count);
         writer->add_nulls(null_count);
         EXPECT_TRUE(writer->finish(file_writer.get(), meta).ok());
@@ -74,7 +83,7 @@ void get_bitmap_reader_iter(const std::string& file_name, const ColumnIndexMetaP
                             BitmapIndexReader** reader, BitmapIndexIterator** iter) {
     io::FileReaderSPtr file_reader;
     ASSERT_EQ(io::global_local_filesystem()->open_file(file_name, &file_reader), Status::OK());
-    *reader = new BitmapIndexReader(std::move(file_reader), &meta.bitmap_index());
+    *reader = new BitmapIndexReader(std::move(file_reader), meta.bitmap_index());
     auto st = (*reader)->load(true, false);
     EXPECT_TRUE(st.ok());
 
@@ -91,12 +100,12 @@ TEST_F(BitmapIndexTest, test_invert) {
 
     std::string file_name = kTestDir + "/invert";
     ColumnIndexMetaPB meta;
-    write_index_file<OLAP_FIELD_TYPE_INT>(file_name, io::global_local_filesystem(), val,
-                                          num_uint8_rows, 0, &meta);
+    write_index_file<FieldType::OLAP_FIELD_TYPE_INT>(file_name, io::global_local_filesystem(), val,
+                                                     num_uint8_rows, 0, &meta);
     {
         BitmapIndexReader* reader = nullptr;
         BitmapIndexIterator* iter = nullptr;
-        get_bitmap_reader_iter<OLAP_FIELD_TYPE_INT>(file_name, meta, &reader, &iter);
+        get_bitmap_reader_iter<FieldType::OLAP_FIELD_TYPE_INT>(file_name, meta, &reader, &iter);
         EXPECT_FALSE(iter == nullptr);
 
         int value = 2;
@@ -107,7 +116,7 @@ TEST_F(BitmapIndexTest, test_invert) {
         EXPECT_EQ(2, iter->current_ordinal());
 
         Roaring bitmap;
-        iter->read_bitmap(iter->current_ordinal(), &bitmap);
+        static_cast<void>(iter->read_bitmap(iter->current_ordinal(), &bitmap));
         EXPECT_TRUE(Roaring::bitmapOf(1, 2) == bitmap);
 
         int value2 = 1024 * 9;
@@ -116,15 +125,16 @@ TEST_F(BitmapIndexTest, test_invert) {
         EXPECT_TRUE(exact_match);
         EXPECT_EQ(1024 * 9, iter->current_ordinal());
 
-        iter->read_union_bitmap(iter->current_ordinal(), iter->bitmap_nums(), &bitmap);
+        static_cast<void>(
+                iter->read_union_bitmap(iter->current_ordinal(), iter->bitmap_nums(), &bitmap));
         EXPECT_EQ(1025, bitmap.cardinality());
 
         int value3 = 1024;
-        iter->seek_dictionary(&value3, &exact_match);
+        static_cast<void>(iter->seek_dictionary(&value3, &exact_match));
         EXPECT_EQ(1024, iter->current_ordinal());
 
         Roaring bitmap2;
-        iter->read_union_bitmap(0, iter->current_ordinal(), &bitmap2);
+        static_cast<void>(iter->read_union_bitmap(0, iter->current_ordinal(), &bitmap2));
         EXPECT_EQ(1024, bitmap2.cardinality());
 
         delete reader;
@@ -146,13 +156,13 @@ TEST_F(BitmapIndexTest, test_invert_2) {
 
     std::string file_name = kTestDir + "/invert2";
     ColumnIndexMetaPB meta;
-    write_index_file<OLAP_FIELD_TYPE_INT>(file_name, io::global_local_filesystem(), val,
-                                          num_uint8_rows, 0, &meta);
+    write_index_file<FieldType::OLAP_FIELD_TYPE_INT>(file_name, io::global_local_filesystem(), val,
+                                                     num_uint8_rows, 0, &meta);
 
     {
         BitmapIndexReader* reader = nullptr;
         BitmapIndexIterator* iter = nullptr;
-        get_bitmap_reader_iter<OLAP_FIELD_TYPE_INT>(file_name, meta, &reader, &iter);
+        get_bitmap_reader_iter<FieldType::OLAP_FIELD_TYPE_INT>(file_name, meta, &reader, &iter);
 
         int value = 1026;
         bool exact_match;
@@ -163,7 +173,7 @@ TEST_F(BitmapIndexTest, test_invert_2) {
         EXPECT_EQ(1024, iter->current_ordinal());
 
         Roaring bitmap;
-        iter->read_union_bitmap(0, iter->current_ordinal(), &bitmap);
+        static_cast<void>(iter->read_union_bitmap(0, iter->current_ordinal(), &bitmap));
         EXPECT_EQ(1024, bitmap.cardinality());
 
         delete reader;
@@ -183,12 +193,12 @@ TEST_F(BitmapIndexTest, test_multi_pages) {
 
     std::string file_name = kTestDir + "/mul";
     ColumnIndexMetaPB meta;
-    write_index_file<OLAP_FIELD_TYPE_BIGINT>(file_name, io::global_local_filesystem(), val,
-                                             num_uint8_rows, 0, &meta);
+    write_index_file<FieldType::OLAP_FIELD_TYPE_BIGINT>(file_name, io::global_local_filesystem(),
+                                                        val, num_uint8_rows, 0, &meta);
     {
         BitmapIndexReader* reader = nullptr;
         BitmapIndexIterator* iter = nullptr;
-        get_bitmap_reader_iter<OLAP_FIELD_TYPE_BIGINT>(file_name, meta, &reader, &iter);
+        get_bitmap_reader_iter<FieldType::OLAP_FIELD_TYPE_BIGINT>(file_name, meta, &reader, &iter);
 
         int64_t value = 2019;
         bool exact_match;
@@ -197,7 +207,7 @@ TEST_F(BitmapIndexTest, test_multi_pages) {
         EXPECT_EQ(0, iter->current_ordinal());
 
         Roaring bitmap;
-        iter->read_bitmap(iter->current_ordinal(), &bitmap);
+        static_cast<void>(iter->read_bitmap(iter->current_ordinal(), &bitmap));
         EXPECT_EQ(1, bitmap.cardinality());
 
         delete reader;
@@ -215,15 +225,15 @@ TEST_F(BitmapIndexTest, test_null) {
 
     std::string file_name = kTestDir + "/null";
     ColumnIndexMetaPB meta;
-    write_index_file<OLAP_FIELD_TYPE_BIGINT>(file_name, io::global_local_filesystem(), val,
-                                             num_uint8_rows, 30, &meta);
+    write_index_file<FieldType::OLAP_FIELD_TYPE_BIGINT>(file_name, io::global_local_filesystem(),
+                                                        val, num_uint8_rows, 30, &meta);
     {
         BitmapIndexReader* reader = nullptr;
         BitmapIndexIterator* iter = nullptr;
-        get_bitmap_reader_iter<OLAP_FIELD_TYPE_BIGINT>(file_name, meta, &reader, &iter);
+        get_bitmap_reader_iter<FieldType::OLAP_FIELD_TYPE_BIGINT>(file_name, meta, &reader, &iter);
 
         Roaring bitmap;
-        iter->read_null_bitmap(&bitmap);
+        static_cast<void>(iter->read_null_bitmap(&bitmap));
         EXPECT_EQ(30, bitmap.cardinality());
 
         delete reader;

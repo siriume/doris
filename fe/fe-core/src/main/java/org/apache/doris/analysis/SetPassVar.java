@@ -26,8 +26,6 @@ import org.apache.doris.mysql.privilege.Auth;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.qe.ConnectContext;
 
-import com.google.common.base.Strings;
-
 public class SetPassVar extends SetVar {
     private UserIdentity userIdent;
     private PassVar passVar;
@@ -36,6 +34,7 @@ public class SetPassVar extends SetVar {
     public SetPassVar(UserIdentity userIdent, PassVar passVar) {
         this.userIdent = userIdent;
         this.passVar = passVar;
+        this.varType = SetVarType.SET_PASS_VAR;
     }
 
     public UserIdentity getUserIdent() {
@@ -48,10 +47,6 @@ public class SetPassVar extends SetVar {
 
     @Override
     public void analyze(Analyzer analyzer) throws AnalysisException {
-        if (Strings.isNullOrEmpty(analyzer.getClusterName())) {
-            ErrorReport.reportAnalysisException(ErrorCode.ERR_CLUSTER_NO_SELECT_CLUSTER);
-        }
-
         boolean isSelf = false;
         ConnectContext ctx = ConnectContext.get();
         if (userIdent == null) {
@@ -59,7 +54,7 @@ public class SetPassVar extends SetVar {
             userIdent = ctx.getCurrentUserIdentity();
             isSelf = true;
         } else {
-            userIdent.analyze(analyzer.getClusterName());
+            userIdent.analyze();
             if (userIdent.equals(ctx.getCurrentUserIdentity())) {
                 isSelf = true;
             }

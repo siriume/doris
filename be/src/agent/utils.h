@@ -17,18 +17,24 @@
 
 #pragma once
 
-#include <gen_cpp/FrontendService.h>
-#include <gen_cpp/HeartbeatService_types.h>
-#include <gen_cpp/MasterService_types.h>
+#include <butil/macros.h>
+
+#include <map>
+#include <string>
 
 #include "common/status.h"
-#include "gutil/macros.h"
 
 namespace doris {
+class TConfirmUnusedRemoteFilesRequest;
+class TConfirmUnusedRemoteFilesResult;
+class TFinishTaskRequest;
+class TMasterResult;
+class TReportRequest;
+class ClusterInfo;
 
 class MasterServerClient {
 public:
-    static MasterServerClient* create(const TMasterInfo& master_info);
+    static MasterServerClient* create(const ClusterInfo* cluster_info);
     static MasterServerClient* instance();
 
     ~MasterServerClient() = default;
@@ -55,12 +61,12 @@ public:
                                        TConfirmUnusedRemoteFilesResult* result);
 
 private:
-    MasterServerClient(const TMasterInfo& master_info);
+    MasterServerClient(const ClusterInfo* cluster_info);
 
     DISALLOW_COPY_AND_ASSIGN(MasterServerClient);
 
-    // Not owner. Reference to the ExecEnv::_master_info
-    const TMasterInfo& _master_info;
+    // Not owner. Reference to the ExecEnv::_cluster_info
+    const ClusterInfo* _cluster_info;
 };
 
 class AgentUtils {

@@ -115,7 +115,7 @@ suite("test_outer_join_with_inline_view") {
     sql """
         CREATE TABLE `subquery_table_3` (
         `org_code` varchar(96) NULL, 
-        `bo_ql_in_advance` decimal(27, 6) NULL
+        `bo_ql_in_advance` decimal(24, 6) NULL
         ) ENGINE=OLAP
         DUPLICATE KEY(`org_code`)
         COMMENT 'OLAP'
@@ -158,4 +158,26 @@ suite("test_outer_join_with_inline_view") {
         group by
             aa.org_code;
     """
+
+    sql """drop table if exists tableau_trans_wide_day_month_year;"""
+    sql """CREATE TABLE
+            `tableau_trans_wide_day_month_year` (
+                `business_type` varchar(200) NULL 
+            ) ENGINE = OLAP 
+            DUPLICATE KEY(`business_type`) 
+            DISTRIBUTED BY HASH(`business_type`) BUCKETS 15 
+            PROPERTIES (
+            "replication_allocation" = "tag.location.default: 1"
+            );"""
+    sql """INSERT INTO `tableau_trans_wide_day_month_year` VALUES (NULL);"""
+    qt_select_with_outerjoin_nullable """ SELECT '2023-10-07' a
+                                            FROM 
+                                                (SELECT t.business_type
+                                                FROM tableau_trans_wide_day_month_year t ) a full
+                                            JOIN 
+                                                (SELECT t.business_type
+                                                FROM tableau_trans_wide_day_month_year t
+                                                WHERE false ) c
+                                                ON nvl(a.business_type,'0')=nvl(c.business_type,'0'); """
+    sql """drop table if exists tableau_trans_wide_day_month_year;"""
 }

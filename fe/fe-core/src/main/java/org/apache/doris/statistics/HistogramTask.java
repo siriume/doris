@@ -18,18 +18,15 @@
 package org.apache.doris.statistics;
 
 import org.apache.doris.catalog.Env;
+import org.apache.doris.common.DdlException;
 import org.apache.doris.common.FeConstants;
-import org.apache.doris.qe.AutoCloseConnectContext;
-import org.apache.doris.qe.StmtExecutor;
+import org.apache.doris.statistics.AnalysisInfo.AnalysisMethod;
 import org.apache.doris.statistics.util.StatisticsUtil;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.apache.commons.text.StringSubstitutor;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Each task analyze one column.
@@ -46,67 +43,55 @@ public class HistogramTask extends BaseAnalysisTask {
             + "    ${idxId} AS idx_id, "
             + "    '${colId}' AS col_id, "
             + "    ${sampleRate} AS sample_rate, "
-            + "    HISTOGRAM(`${colName}`, 1, ${maxBucketNum}) AS buckets, "
+            + "    HISTOGRAM(`${colName}`, ${maxBucketNum}) AS buckets, "
             + "    NOW() AS create_time "
             + "FROM "
             + "    `${dbName}`.`${tblName}`";
 
-    private static final String ANALYZE_HISTOGRAM_SQL_TEMPLATE_PART = ANALYZE_HISTOGRAM_SQL_TEMPLATE_TABLE
-            + "    PARTITION (${partName})";
-
-    @VisibleForTesting
-    public HistogramTask() {
-        super();
-    }
-
-    public HistogramTask(AnalysisTaskScheduler analysisTaskScheduler, AnalysisTaskInfo info) {
-        super(analysisTaskScheduler, info);
+    public HistogramTask(AnalysisInfo info) {
+        super(info);
     }
 
     @Override
-    public void execute() throws Exception {
+    public void doExecute() throws Exception {
         Map<String, String> params = new HashMap<>();
         params.put("internalDB", FeConstants.INTERNAL_DB_NAME);
         params.put("histogramStatTbl", StatisticConstants.HISTOGRAM_TBL_NAME);
         params.put("catalogId", String.valueOf(catalog.getId()));
         params.put("dbId", String.valueOf(db.getId()));
         params.put("tblId", String.valueOf(tbl.getId()));
-        params.put("idxId", "-1");
+        params.put("idxId", String.valueOf(info.indexId));
         params.put("colId", String.valueOf(info.colName));
-        params.put("dbName", info.dbName);
-        params.put("tblName", String.valueOf(info.tblName));
+        params.put("dbName", db.getFullName());
+        params.put("tblName", tbl.getName());
         params.put("colName", String.valueOf(info.colName));
-        params.put("sampleRate", String.valueOf(info.sampleRate));
+        params.put("sampleRate", getSampleRateFunction());
         params.put("maxBucketNum", String.valueOf(info.maxBucketNum));
-        params.put("percentValue", String.valueOf((int) (info.sampleRate * 100)));
 
-        String histogramSql;
-        Set<String> partitionNames = info.partitionNames;
+        StringSubstitutor stringSubstitutor = new StringSubstitutor(params);
+        StatisticsUtil.execUpdate(stringSubstitutor.replace(ANALYZE_HISTOGRAM_SQL_TEMPLATE_TABLE));
+        Env.getCurrentEnv().getStatisticsCache().refreshHistogramSync(
+                tbl.getDatabase().getCatalog().getId(), tbl.getDatabase().getId(), tbl.getId(), -1, col.getName());
+    }
 
-        if (partitionNames.isEmpty()) {
-            StringSubstitutor stringSubstitutor = new StringSubstitutor(params);
-            histogramSql = stringSubstitutor.replace(ANALYZE_HISTOGRAM_SQL_TEMPLATE_TABLE);
+    @Override
+    protected void doSample() {
+    }
+
+    @Override
+    protected void deleteNotExistPartitionStats(AnalysisInfo jobInfo) throws DdlException {
+    }
+
+    private String getSampleRateFunction() {
+        if (info.analysisMethod == AnalysisMethod.FULL) {
+            return "0";
+        }
+        if (info.samplePercent > 0) {
+            return String.valueOf(info.samplePercent / 100.0);
         } else {
-            try {
-                tbl.readLock();
-                String partNames = info.partitionNames.stream()
-                        .filter(x -> tbl.getPartition(x) != null)
-                        .collect(Collectors.joining(","));
-                params.put("partName", partNames);
-                StringSubstitutor stringSubstitutor = new StringSubstitutor(params);
-                histogramSql = stringSubstitutor.replace(ANALYZE_HISTOGRAM_SQL_TEMPLATE_PART);
-            } finally {
-                tbl.readUnlock();
-            }
+            long rowCount = tbl.getRowCount() > 0 ? tbl.getRowCount() : 1;
+            double sampRate = (double) info.sampleRows / rowCount;
+            return sampRate >= 1 ? "1.0" : String.format("%.4f", sampRate);
         }
-
-        LOG.info("SQL to collect the histogram:\n {}", histogramSql);
-
-        try (AutoCloseConnectContext r = StatisticsUtil.buildConnectContext()) {
-            this.stmtExecutor = new StmtExecutor(r.connectContext, histogramSql);
-            this.stmtExecutor.execute();
-        }
-
-        Env.getCurrentEnv().getStatisticsCache().refreshSync(tbl.getId(), -1, col.getName());
     }
 }

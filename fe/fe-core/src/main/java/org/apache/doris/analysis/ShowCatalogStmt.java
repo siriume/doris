@@ -25,12 +25,15 @@ import org.apache.doris.qe.ShowResultSetMetaData;
 /**
  * Statement for show all catalog or desc the specific catalog.
  */
-public class ShowCatalogStmt extends ShowStmt {
+public class ShowCatalogStmt extends ShowStmt implements NotFallbackInParser {
     private static final ShowResultSetMetaData META_DATA_ALL =
             ShowResultSetMetaData.builder().addColumn(new Column("CatalogId", ScalarType.BIGINT))
                     .addColumn(new Column("CatalogName", ScalarType.createVarchar(64)))
                     .addColumn(new Column("Type", ScalarType.createStringType()))
                     .addColumn(new Column("IsCurrent", ScalarType.createStringType()))
+                    .addColumn(new Column("CreateTime", ScalarType.createStringType()))
+                    .addColumn(new Column("LastUpdateTime", ScalarType.createStringType()))
+                    .addColumn(new Column("Comment", ScalarType.createStringType()))
                     .build();
 
     private static final ShowResultSetMetaData META_DATA_SPECIFIC =

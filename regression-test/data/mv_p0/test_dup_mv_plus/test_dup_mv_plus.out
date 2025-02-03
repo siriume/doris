@@ -37,13 +37,19 @@
 
 -- !select_group_mv_add --
 -4
+3
 1
 2
--3
 
 -- !select_group_mv_not --
 -3
 -4
 1
 2
+
+-- !select_mv --
+-4	-3
+3	-2
+1	2
+2	3
 

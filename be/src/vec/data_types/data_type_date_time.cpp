@@ -20,17 +20,40 @@
 
 #include "vec/data_types/data_type_date_time.h"
 
-#include "runtime/datetime_value.h"
+#include <typeinfo>
+#include <utility>
+
 #include "util/binary_cast.hpp"
+#include "vec/columns/column.h"
 #include "vec/columns/column_const.h"
+#include "vec/columns/column_vector.h"
 #include "vec/columns/columns_number.h"
+#include "vec/common/assert_cast.h"
+#include "vec/common/string_buffer.hpp"
 #include "vec/core/types.h"
+#include "vec/data_types/data_type.h"
 #include "vec/io/io_helper.h"
+#include "vec/io/reader_buffer.h"
 #include "vec/runtime/vdatetime_value.h"
+
 namespace doris::vectorized {
 
 bool DataTypeDateTime::equals(const IDataType& rhs) const {
     return typeid(rhs) == typeid(*this);
+}
+
+size_t DataTypeDateTime::number_length() const {
+    //2024-01-01 00:00:00
+    return 20;
+}
+
+void DataTypeDateTime::push_number(ColumnString::Chars& chars, const Int64& num) const {
+    doris::VecDateTimeValue value = binary_cast<Int64, doris::VecDateTimeValue>(num);
+
+    char buf[64];
+    char* pos = value.to_string(buf);
+    // DateTime to_string the end is /0
+    chars.insert(buf, pos - 1);
 }
 
 std::string DataTypeDateTime::to_string(const IColumn& column, size_t row_num) const {
@@ -39,8 +62,7 @@ std::string DataTypeDateTime::to_string(const IColumn& column, size_t row_num) c
     row_num = result.second;
 
     Int64 int_val = assert_cast<const ColumnInt64&>(*ptr).get_element(row_num);
-    doris::vectorized::VecDateTimeValue value =
-            binary_cast<Int64, doris::vectorized::VecDateTimeValue>(int_val);
+    doris::VecDateTimeValue value = binary_cast<Int64, doris::VecDateTimeValue>(int_val);
 
     char buf[64];
     value.to_string(buf);
@@ -48,6 +70,14 @@ std::string DataTypeDateTime::to_string(const IColumn& column, size_t row_num) c
     return buf;
 }
 
+std::string DataTypeDateTime::to_string(Int64 int_val) const {
+    doris::VecDateTimeValue value = binary_cast<Int64, doris::VecDateTimeValue>(int_val);
+
+    char buf[64];
+    value.to_string(buf);
+    // DateTime to_string the end is /0
+    return buf;
+}
 void DataTypeDateTime::to_string(const IColumn& column, size_t row_num,
                                  BufferWritable& ostr) const {
     auto result = check_column_const_set_readability(column, row_num);
@@ -55,8 +85,7 @@ void DataTypeDateTime::to_string(const IColumn& column, size_t row_num,
     row_num = result.second;
 
     Int64 int_val = assert_cast<const ColumnInt64&>(*ptr).get_element(row_num);
-    doris::vectorized::VecDateTimeValue value =
-            binary_cast<Int64, doris::vectorized::VecDateTimeValue>(int_val);
+    doris::VecDateTimeValue value = binary_cast<Int64, doris::VecDateTimeValue>(int_val);
 
     char buf[64];
     char* pos = value.to_string(buf);
@@ -76,9 +105,9 @@ Status DataTypeDateTime::from_string(ReadBuffer& rb, IColumn* column) const {
 }
 
 void DataTypeDateTime::cast_to_date_time(Int64& x) {
-    auto value = binary_cast<Int64, doris::vectorized::VecDateTimeValue>(x);
+    auto value = binary_cast<Int64, doris::VecDateTimeValue>(x);
     value.to_datetime();
-    x = binary_cast<doris::vectorized::VecDateTimeValue, Int64>(value);
+    x = binary_cast<doris::VecDateTimeValue, Int64>(value);
 }
 
 MutableColumnPtr DataTypeDateTime::create_column() const {

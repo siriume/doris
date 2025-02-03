@@ -17,9 +17,29 @@
 
 #pragma once
 
-#include "gen_cpp/function_service.pb.h"
-#include "util/brpc_client_cache.h"
+#include <fmt/format.h>
+#include <gen_cpp/Types_types.h>
+#include <stddef.h>
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "common/status.h"
+#include "udf/udf.h"
+#include "vec/core/block.h"
+#include "vec/core/column_numbers.h"
+#include "vec/core/column_with_type_and_name.h"
+#include "vec/core/columns_with_type_and_name.h"
+#include "vec/core/types.h"
+#include "vec/data_types/data_type.h"
 #include "vec/functions/function.h"
+
+namespace doris {
+class PFunctionCallRequest;
+class PFunctionService_Stub;
+class PValues;
+} // namespace doris
 
 namespace doris::vectorized {
 
@@ -28,24 +48,14 @@ public:
     RPCFnImpl(const TFunction& fn);
     ~RPCFnImpl() = default;
     Status vec_call(FunctionContext* context, vectorized::Block& block,
-                    const std::vector<size_t>& arguments, size_t result, size_t input_rows_count);
+                    const ColumnNumbers& arguments, uint32_t result, size_t input_rows_count);
     bool available() { return _client != nullptr; }
 
 private:
-    void _convert_block_to_proto(vectorized::Block& block,
-                                 const vectorized::ColumnNumbers& arguments,
-                                 size_t input_rows_count, PFunctionCallRequest* request);
+    Status _convert_block_to_proto(vectorized::Block& block,
+                                   const vectorized::ColumnNumbers& arguments,
+                                   size_t input_rows_count, PFunctionCallRequest* request);
     void _convert_to_block(vectorized::Block& block, const PValues& result, size_t pos);
-    void _convert_nullable_col_to_pvalue(const vectorized::ColumnPtr& column,
-                                         const vectorized::DataTypePtr& data_type,
-                                         const vectorized::ColumnUInt8& null_col, PValues* arg,
-                                         int start, int end);
-    template <bool nullable>
-    void _convert_col_to_pvalue(const vectorized::ColumnPtr& column,
-                                const vectorized::DataTypePtr& data_type, PValues* arg, int start,
-                                int end);
-    template <bool nullable>
-    void _convert_to_column(vectorized::MutableColumnPtr& column, const PValues& result);
 
     std::shared_ptr<PFunctionService_Stub> _client;
     std::string _function_name;
@@ -78,24 +88,21 @@ public:
     const DataTypePtr& get_return_type() const override { return _return_type; }
 
     PreparedFunctionPtr prepare(FunctionContext* context, const Block& sample_block,
-                                const ColumnNumbers& arguments, size_t result) const override {
+                                const ColumnNumbers& arguments, uint32_t result) const override {
         return nullptr;
     }
 
     Status open(FunctionContext* context, FunctionContext::FunctionStateScope scope) override;
 
     Status execute(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                   size_t result, size_t input_rows_count, bool dry_run = false) override;
+                   uint32_t result, size_t input_rows_count, bool dry_run = false) const override;
 
-    bool is_deterministic() const override { return false; }
-
-    bool is_deterministic_in_scope_of_query() const override { return false; }
+    bool is_use_default_implementation_for_constants() const override { return true; }
 
 private:
     DataTypes _argument_types;
     DataTypePtr _return_type;
     TFunction _tfn;
-    std::unique_ptr<RPCFnImpl> _fn;
 };
 
 } // namespace doris::vectorized

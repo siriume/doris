@@ -17,10 +17,18 @@
 
 #include "empty_set_operator.h"
 
-#include "vec/exec/vempty_set_node.h"
+#include <string>
+
+#include "pipeline/exec/operator.h"
 
 namespace doris::pipeline {
+#include "common/compile_check_begin.h"
 
-OPERATOR_CODE_GENERATOR(EmptySetSourceOperator, SourceOperator)
+Status EmptySetSourceOperatorX::get_block(RuntimeState* state, vectorized::Block* block,
+                                          bool* eos) {
+    *eos = true;
+    return Status::OK();
+}
 
+#include "common/compile_check_end.h"
 } // namespace doris::pipeline

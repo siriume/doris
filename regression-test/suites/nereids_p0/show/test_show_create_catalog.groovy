@@ -15,33 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-suite("test_show_create_catalog", "query") {
-    sql "SET enable_nereids_planner=true"
-    sql "SET enable_fallback_to_original_planner=false"
-    String catalog_name = "test_show_create_mysql_jdbc_catalog";
-    try {
-        String enabled = context.config.otherConfigs.get("enableJdbcTest")
-        String mysql_port = context.config.otherConfigs.get("mysql_57_port");
-        if (enabled != null && enabled.equalsIgnoreCase("true")) {
-            
-            sql """drop catalog if exists ${catalog_name} """
+suite("test_show_create_catalog", "p0,external,hive,external_docker,external_docker_hive") {
 
-            // if use 'com.mysql.cj.jdbc.Driver' here, it will report: ClassNotFound
-            sql """ CREATE CATALOG ${catalog_name} PROPERTIES (
-                    "type"="jdbc",
-                    "jdbc.user"="root",
-                    "jdbc.password"="123456",
-                    "jdbc.jdbc_url" = "jdbc:mysql://127.0.0.1:${mysql_port}/doris_test?useSSL=false",
-                    "jdbc.driver_url" = "https://doris-community-test-1308700295.cos.ap-hongkong.myqcloud.com/jdbc_driver/mysql-connector-java-8.0.25.jar",
-                    "jdbc.driver_class" = "com.mysql.cj.jdbc.Driver");
-                """
+    String catalog_name = "es"
 
-            qt_select "show create catalog `${catalog_name}`"
+    sql """drop catalog if exists ${catalog_name}"""
+    sql """create catalog if not exists ${catalog_name} properties (
+            "type"="es",
+            "hosts"="http://127.0.0.1:9200"
+    );"""
 
-        }
-    } finally {
+    checkNereidsExecute("""show create catalog ${catalog_name}""")
+    qt_cmd("""show create catalog ${catalog_name}""")
 
-        try_sql("DROP CATALOG IF EXISTS `${catalog_name}`")
-    }
-   
+    sql """drop catalog if exists ${catalog_name}"""
 }

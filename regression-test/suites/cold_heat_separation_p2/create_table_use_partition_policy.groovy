@@ -34,20 +34,21 @@ suite("create_table_use_partition_policy") {
     // data_sizes is one arrayList<Long>, t is tablet
     def fetchDataSize = { data_sizes, t ->
         def tabletId = t[0]
-        String meta_url = t[16]
+        String meta_url = t[17]
         def clos = {  respCode, body ->
-            logger.info("test ttl expired resp Code {}", "${respCode}".toString())
             assertEquals("${respCode}".toString(), "200")
             String out = "${body}".toString()
+            logger.info("test ttl expired resp Code {}, body {}", "${respCode}".toString(), out)
             def obj = new JsonSlurper().parseText(out)
             data_sizes[0] = obj.local_data_size
             data_sizes[1] = obj.remote_data_size
         }
-        fetchBeHttp(clos, meta_url)
+        fetchBeHttp(clos, meta_url.replace("header", "data_size"))
     }
     // used as passing out parameter to fetchDataSize
     List<Long> sizes = [-1, -1]
     def tableName = "lineitem1"
+    sql """ DROP TABLE IF EXISTS ${tableName} """
     def stream_load_one_part = { partnum ->
         streamLoad {
             table tableName
@@ -132,7 +133,7 @@ suite("create_table_use_partition_policy") {
     }
 
     sql """
-        CREATE RESOURCE "${resource_name}"
+        CREATE RESOURCE IF NOT EXISTS "${resource_name}"
         PROPERTIES(
             "type"="s3",
             "AWS_ENDPOINT" = "${getS3Endpoint()}",
@@ -149,7 +150,7 @@ suite("create_table_use_partition_policy") {
     """
 
     sql """
-        CREATE STORAGE POLICY ${policy_name}
+        CREATE STORAGE POLICY IF NOT EXISTS ${policy_name}
         PROPERTIES(
             "storage_resource" = "${resource_name}",
             "cooldown_ttl" = "300"
@@ -180,7 +181,7 @@ suite("create_table_use_partition_policy") {
             DUPLICATE KEY(L_ORDERKEY, L_PARTKEY, L_SUPPKEY, L_LINENUMBER)
             PARTITION BY RANGE(`L_SHIPDATE`)
             (
-                PARTITION `p202301` VALUES LESS THAN ("2017-02-01") ("storage_policy" = "${policy_name}"),
+                PARTITION `p202301` VALUES LESS THAN ("1995-12-01") ("storage_policy" = "${policy_name}"),
                 PARTITION `p202302` VALUES LESS THAN ("2017-03-01")
             )
             DISTRIBUTED BY HASH(L_ORDERKEY) BUCKETS 3
@@ -227,7 +228,8 @@ suite("create_table_use_partition_policy") {
     assertTrue(tablets.size() > 0)
     LocalDataSize1 = sizes[0]
     RemoteDataSize1 = sizes[1]
-    while (RemoteDataSize1 != originLocalDataSize1) {
+    Long sleepTimes = 0;
+    while (RemoteDataSize1 != originLocalDataSize1 && sleepTimes < 60) {
         log.info( "test remote size is same with origin size, sleep 10s")
         sleep(10000)
         tablets = sql """
@@ -236,6 +238,7 @@ suite("create_table_use_partition_policy") {
         fetchDataSize(sizes, tablets[0])
         LocalDataSize1 = sizes[0]
         RemoteDataSize1 = sizes[1]
+        sleepTimes += 1
     }
     log.info( "test local size is  zero")
     assertEquals(LocalDataSize1, 0)
@@ -247,17 +250,10 @@ suite("create_table_use_partition_policy") {
     """
     log.info( "test tablets not empty")
     assertTrue(tablets.size() > 0)
-    fetchDataSize(sizes, tbalets[0])
-    // while (tablets[0][8] == 0) {
-    //     log.info( "test local size is zero, sleep 10s")
-    //     sleep(10000)
-    //     tablets = sql """
-    //     SHOW TABLETS FROM ${tableName} PARTITIONS(p202302)
-    //     """
-    // }
+    fetchDataSize(sizes, tablets[0])
     LocalDataSize1 = sizes[0]
     RemoteDataSize1 = sizes[1]
-    log.info( "test local size not zero")
+    log.info( "test local size is not zero")
     assertTrue(LocalDataSize1 != 0)
     log.info( "test remote size is zero")
     assertEquals(RemoteDataSize1, 0)
@@ -290,7 +286,7 @@ suite("create_table_use_partition_policy") {
             DUPLICATE KEY(L_ORDERKEY, L_PARTKEY, L_SUPPKEY, L_LINENUMBER)
             PARTITION BY RANGE(`L_SHIPDATE`)
             (
-                PARTITION `p202301` VALUES LESS THAN ("2017-02-01") ("storage_policy" = "${policy_name}"),
+                PARTITION `p202301` VALUES LESS THAN ("1995-12-01") ("storage_policy" = "${policy_name}"),
                 PARTITION `p202302` VALUES LESS THAN ("2017-03-01")
             )
             DISTRIBUTED BY HASH(L_ORDERKEY) BUCKETS 3
@@ -336,7 +332,8 @@ suite("create_table_use_partition_policy") {
     assertTrue(tablets.size() > 0)
     LocalDataSize1 = sizes[0]
     RemoteDataSize1 = sizes[1]
-    while (RemoteDataSize1 != originLocalDataSize1) {
+    sleepTimes = 0
+    while (RemoteDataSize1 != originLocalDataSize1 && sleepTimes < 60) {
         log.info( "test remote size is same with origin size, sleep 10s")
         sleep(10000)
         tablets = sql """
@@ -345,6 +342,7 @@ suite("create_table_use_partition_policy") {
         fetchDataSize(sizes, tablets[0])
         LocalDataSize1 = sizes[0]
         RemoteDataSize1 = sizes[1]
+        sleepTimes += 1
     }
     log.info( "test local size is zero")
     assertEquals(LocalDataSize1, 0)
@@ -359,7 +357,7 @@ suite("create_table_use_partition_policy") {
     assertTrue(tablets.size() > 0)
     LocalDataSize1 = sizes[0]
     RemoteDataSize1 = sizes[1]
-    log.info( "test local size not zero")
+    log.info( "test local size is not zero")
     assertTrue(LocalDataSize1 != 0)
     log.info( "test remote size is zero")
     assertEquals(RemoteDataSize1, 0)

@@ -21,13 +21,25 @@ public class AutoCloseConnectContext implements AutoCloseable {
 
     public final ConnectContext connectContext;
 
+    private final ConnectContext previousContext;
+
     public AutoCloseConnectContext(ConnectContext connectContext) {
+        this.previousContext = ConnectContext.get();
         this.connectContext = connectContext;
         connectContext.setThreadLocalInfo();
     }
 
+    public void call() {
+        // try (AutoCloseConnectContext autoCloseCtx = new AutoCloseConnectContext(context)) {
+        // will report autoCloseCtx is not used, so call an empty method.
+    }
+
     @Override
     public void close() {
+        connectContext.clear();
         ConnectContext.remove();
+        if (previousContext != null) {
+            previousContext.setThreadLocalInfo();
+        }
     }
 }

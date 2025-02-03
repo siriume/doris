@@ -35,8 +35,7 @@ import org.apache.doris.thrift.TInPredicate;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import com.google.gson.annotations.SerializedName;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -47,15 +46,13 @@ import java.util.List;
  * of values (remaining children).
  */
 public class InPredicate extends Predicate {
-    private static final Logger LOG = LogManager.getLogger(InPredicate.class);
 
     private static final String IN_SET_LOOKUP = "in_set_lookup";
     private static final String NOT_IN_SET_LOOKUP = "not_in_set_lookup";
     private static final String IN_ITERATE = "in_iterate";
     private static final String NOT_IN_ITERATE = "not_in_iterate";
-    private final boolean isNotIn;
-    private static final String IN = "in";
-    private static final String NOT_IN = "not_in";
+    @SerializedName("ini")
+    private boolean isNotIn;
 
     private static final NullLiteral NULL_LITERAL = new NullLiteral();
 
@@ -64,33 +61,35 @@ public class InPredicate extends Predicate {
             if (t.isNull()) {
                 continue;
             }
-            // TODO we do not support codegen for CHAR and the In predicate must be codegened
+            // TODO we do not support codegen for CHAR and the In predicate must be
+            // codegened
             // because it has variable number of arguments. This will force CHARs to be
-            // cast up to strings; meaning that "in" comparisons will not have CHAR comparison
+            // cast up to strings; meaning that "in" comparisons will not have CHAR
+            // comparison
             // semantics.
             if (t.getPrimitiveType() == PrimitiveType.CHAR) {
                 continue;
             }
 
-            String typeString = Function.getUdfTypeName(t.getPrimitiveType());
-
             functionSet.addBuiltinBothScalaAndVectorized(ScalarFunction.createBuiltin(IN_ITERATE,
                     Type.BOOLEAN, Lists.newArrayList(t, t), true,
-                    "doris::InPredicate::in_iterate", null, null, false));
+                    null, null, null, false));
             functionSet.addBuiltinBothScalaAndVectorized(ScalarFunction.createBuiltin(NOT_IN_ITERATE,
                     Type.BOOLEAN, Lists.newArrayList(t, t), true,
-                    "doris::InPredicate::not_in_iterate", null, null, false));
+                    null, null, null, false));
 
-            String prepareFn = "doris::InPredicate::set_lookup_prepare_" + typeString;
-            String closeFn = "doris::InPredicate::set_lookup_close_" + typeString;
             functionSet.addBuiltin(ScalarFunction.createBuiltin(IN_SET_LOOKUP,
                     Type.BOOLEAN, Lists.newArrayList(t, t), true,
-                    "doris::InPredicate::in_set_lookup", prepareFn, closeFn, false));
+                    null, null, null, false));
             functionSet.addBuiltin(ScalarFunction.createBuiltin(NOT_IN_SET_LOOKUP,
                     Type.BOOLEAN, Lists.newArrayList(t, t), true,
-                    "doris::InPredicate::not_in_set_lookup", prepareFn, closeFn, false));
+                    null, null, null, false));
 
         }
+    }
+
+    private InPredicate() {
+        // use for serde only
     }
 
     // First child is the comparison expr for which we
@@ -150,7 +149,7 @@ public class InPredicate extends Predicate {
     }
 
     public List<Expr> getListChildren() {
-        return  children.subList(1, children.size());
+        return children.subList(1, children.size());
     }
 
     public boolean isNotIn() {
@@ -167,16 +166,13 @@ public class InPredicate extends Predicate {
     }
 
     @Override
-    public void vectorizedAnalyze(Analyzer analyzer) {
-        super.vectorizedAnalyze(analyzer);
-    }
-
-    @Override
     public void analyzeImpl(Analyzer analyzer) throws AnalysisException {
         super.analyzeImpl(analyzer);
+        this.checkIncludeBitmap();
 
         if (contains(Subquery.class)) {
-            // An [NOT] IN predicate with a subquery must contain two children, the second of
+            // An [NOT] IN predicate with a subquery must contain two children, the second
+            // of
             // which is a Subquery.
             if (children.size() != 2 || !(getChild(1) instanceof Subquery)) {
                 throw new AnalysisException("Unsupported IN predicate with a subquery: " + toSql());
@@ -208,7 +204,6 @@ public class InPredicate extends Predicate {
             }
         } else {
             analyzer.castAllToCompatibleType(children);
-            vectorizedAnalyze(analyzer);
         }
 
         boolean allConstant = true;
@@ -219,12 +214,14 @@ public class InPredicate extends Predicate {
             }
         }
         boolean useSetLookup = allConstant;
-        // Only lookup fn_ if all subqueries have been rewritten. If the second child is a
+        // Only lookup fn_ if all subqueries have been rewritten. If the second child is
+        // a
         // subquery, it will have type ArrayType, which cannot be resolved to a builtin
         // function and will fail analysis.
-        Type[] argTypes = {getChild(0).type, getChild(1).type};
+        Type[] argTypes = { getChild(0).type, getChild(1).type };
         if (useSetLookup) {
-            // fn = getBuiltinFunction(analyzer, isNotIn ? NOT_IN_SET_LOOKUP : IN_SET_LOOKUP,
+            // fn = getBuiltinFunction(analyzer, isNotIn ? NOT_IN_SET_LOOKUP :
+            // IN_SET_LOOKUP,
             // argTypes, Function.CompareMode.IS_NONSTRICT_SUPERTYPE_OF);
             opcode = isNotIn ? TExprOpcode.FILTER_NOT_IN : TExprOpcode.FILTER_IN;
         } else {
@@ -273,7 +270,6 @@ public class InPredicate extends Predicate {
         msg.in_predicate = new TInPredicate(isNotIn);
         msg.node_type = TExprNodeType.IN_PRED;
         msg.setOpcode(opcode);
-        msg.setVectorOpcode(vectorOpcode);
     }
 
     @Override
@@ -308,8 +304,8 @@ public class InPredicate extends Predicate {
     }
 
     @Override
-    public Expr getResultValue(boolean inView) throws AnalysisException {
-        recursiveResetChildrenResult(inView);
+    public Expr getResultValue(boolean forPushDownPredicatesToView) throws AnalysisException {
+        recursiveResetChildrenResult(forPushDownPredicatesToView);
         final Expr leftChildValue = getChild(0);
         if (!(leftChildValue instanceof LiteralExpr) || !isLiteralChildren()) {
             return this;

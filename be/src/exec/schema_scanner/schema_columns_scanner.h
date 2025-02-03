@@ -17,19 +17,28 @@
 
 #pragma once
 
-#include <string>
+#include <gen_cpp/FrontendService_types.h>
 
+#include <string>
+#include <vector>
+
+#include "common/status.h"
 #include "exec/schema_scanner.h"
-#include "gen_cpp/FrontendService_types.h"
 
 namespace doris {
+class RuntimeState;
+namespace vectorized {
+class Block;
+} // namespace vectorized
 
 class SchemaColumnsScanner : public SchemaScanner {
+    ENABLE_FACTORY_CREATOR(SchemaColumnsScanner);
+
 public:
     SchemaColumnsScanner();
     ~SchemaColumnsScanner() override;
     Status start(RuntimeState* state) override;
-    Status get_next_block(vectorized::Block* block, bool* eos) override;
+    Status get_next_block_internal(vectorized::Block* block, bool* eos) override;
 
 private:
     Status _get_new_table();

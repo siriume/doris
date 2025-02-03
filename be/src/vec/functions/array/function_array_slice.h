@@ -16,15 +16,28 @@
 // under the License.
 #pragma once
 
-#include <string_view>
+#include <fmt/format.h>
+#include <glog/logging.h>
+#include <stddef.h>
 
-#include "vec/columns/column_array.h"
-#include "vec/columns/column_string.h"
-#include "vec/common/string_ref.h"
-#include "vec/data_types/data_type_array.h"
-#include "vec/data_types/data_type_number.h"
+#include <memory>
+#include <ostream>
+#include <string>
+#include <utility>
+
+#include "common/status.h"
+#include "vec/columns/column.h"
+#include "vec/core/block.h"
+#include "vec/core/column_numbers.h"
+#include "vec/core/column_with_type_and_name.h"
+#include "vec/core/types.h"
+#include "vec/data_types/data_type.h"
 #include "vec/functions/array/function_array_utils.h"
 #include "vec/functions/function.h"
+
+namespace doris {
+class FunctionContext;
+} // namespace doris
 
 namespace doris::vectorized {
 
@@ -56,7 +69,7 @@ public:
     }
 
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        size_t result, size_t input_rows_count) override {
+                        uint32_t result, size_t input_rows_count) const override {
         auto array_column =
                 block.get_by_position(arguments[0]).column->convert_to_full_column_if_const();
         auto offset_column =
@@ -76,7 +89,7 @@ public:
         }
         // prepare dst array column
         bool is_nullable = src.nested_nullmap_data ? true : false;
-        ColumnArrayMutableData dst = create_mutable_data(src.nested_col, is_nullable);
+        ColumnArrayMutableData dst = create_mutable_data(src.nested_col.get(), is_nullable);
         dst.offsets_ptr->reserve(input_rows_count);
         // execute
         slice_array(dst, src, *offset_column, length_column.get());

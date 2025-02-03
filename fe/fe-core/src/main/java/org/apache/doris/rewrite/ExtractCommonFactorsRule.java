@@ -229,7 +229,7 @@ public class ExtractCommonFactorsRule implements ExprRewriteRule {
                 if (!singleColumnPredicate(predicate)) {
                     continue;
                 }
-                SlotRef columnName = (SlotRef) predicate.getChild(0);
+                SlotRef columnName = (SlotRef) predicate.getChildWithoutCast(0);
                 if (predicate instanceof BinaryPredicate) {
                     Range<LiteralExpr> predicateRange = ((BinaryPredicate) predicate).convertToRange();
                     if (predicateRange == null) {
@@ -243,7 +243,9 @@ public class ExtractCommonFactorsRule implements ExprRewriteRule {
                             range = range.intersection(predicateRange);
                         } catch (IllegalArgumentException | ClassCastException e) {
                             // (a >1 and a < 0) ignore this OR clause
-                            LOG.debug("The range without intersection", e);
+                            if (LOG.isDebugEnabled()) {
+                                LOG.debug("The range without intersection", e);
+                            }
                             continue OUT_CONJUNCTS;
                         }
                     }
@@ -319,14 +321,14 @@ public class ExtractCommonFactorsRule implements ExprRewriteRule {
             if (inPredicate.isNotIn()) {
                 return false;
             }
-            if (inPredicate.getChild(0) instanceof SlotRef) {
+            if (inPredicate.getChildWithoutCast(0) instanceof SlotRef) {
                 return true;
             }
             return false;
         } else if (expr instanceof BinaryPredicate) {
             BinaryPredicate binaryPredicate = (BinaryPredicate) expr;
-            if (binaryPredicate.getChild(0) instanceof SlotRef
-                    && binaryPredicate.getChild(1) instanceof LiteralExpr) {
+            if (binaryPredicate.getChildWithoutCast(0) instanceof SlotRef
+                    && binaryPredicate.getChildWithoutCast(1) instanceof LiteralExpr) {
                 return true;
             }
             return false;
@@ -353,7 +355,9 @@ public class ExtractCommonFactorsRule implements ExprRewriteRule {
                 clause1Entry.getValue().add(clause2Value);
             } catch (ClassCastException e) {
                 // ignore a >1.0 or a <false
-                LOG.debug("Abort this range of column" + columnName.toSqlImpl());
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Abort this range of column" + columnName.toSqlImpl());
+                }
                 continue;
             }
             result.put(columnName, clause1Entry.getValue());
@@ -518,9 +522,9 @@ public class ExtractCommonFactorsRule implements ExprRewriteRule {
                 notMergedExprs.add(new CompoundPredicate(Operator.AND, left, right));
             } else if (!(predicate instanceof BinaryPredicate) && !(predicate instanceof InPredicate)) {
                 notMergedExprs.add(predicate);
-            } else if (!(predicate.getChild(0) instanceof SlotRef)) {
+            } else if (!(predicate.getChildWithoutCast(0) instanceof SlotRef)) {
                 notMergedExprs.add(predicate);
-            } else if (!(predicate.getChild(1) instanceof LiteralExpr)) {
+            } else if (!(predicate.getChildWithoutCast(1) instanceof LiteralExpr)) {
                 notMergedExprs.add(predicate);
             } else if (predicate instanceof BinaryPredicate
                     && ((BinaryPredicate) predicate).getOp() != BinaryPredicate.Operator.EQ) {
@@ -529,13 +533,13 @@ public class ExtractCommonFactorsRule implements ExprRewriteRule {
                     && ((InPredicate) predicate).isNotIn()) {
                 notMergedExprs.add(predicate);
             } else {
-                TableName tableName = ((SlotRef) predicate.getChild(0)).getTableName();
+                TableName tableName = ((SlotRef) predicate.getChildWithoutCast(0)).getTableName();
                 String columnWithTable;
                 if (tableName != null) {
                     String tblName = tableName.toString();
-                    columnWithTable = tblName + "." + ((SlotRef) predicate.getChild(0)).getColumnName();
+                    columnWithTable = tblName + "." + ((SlotRef) predicate.getChildWithoutCast(0)).getColumnName();
                 } else {
-                    columnWithTable = ((SlotRef) predicate.getChild(0)).getColumnName();
+                    columnWithTable = ((SlotRef) predicate.getChildWithoutCast(0)).getColumnName();
                 }
                 slotNameToMergeExprsMap.computeIfAbsent(columnWithTable, key -> {
                     slotNameForMerge.add(columnWithTable);

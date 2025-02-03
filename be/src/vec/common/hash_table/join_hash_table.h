@@ -17,717 +17,474 @@
 
 #pragma once
 
-#include "vec/common/allocator.h"
-#include "vec/common/hash_table/hash_table.h"
-
-/** NOTE JoinHashTable could only be used for memmoveable (position independent) types.
-  * Example: std::string is not position independent in libstdc++ with C++11 ABI or in libc++.
-  * Also, key in hash table must be of type, that zero bytes is compared equals to zero key.
-  */
-
-/** Determines the size of the join hash table, and when and how much it should be resized.
-  */
-template <size_t initial_size_degree = 10>
-struct JoinHashTableGrower {
-    /// The state of this structure is enough to get the buffer size of the join hash table.
-    doris::vectorized::UInt8 size_degree = initial_size_degree;
-    doris::vectorized::Int64 double_grow_degree = 31; // 2GB
-
-    size_t bucket_size() const { return 1ULL << (size_degree - 1); }
-
-    /// The size of the join hash table in the cells.
-    size_t buf_size() const { return 1ULL << size_degree; }
-
-    size_t max_fill() const { return buf_size(); }
-
-    size_t mask() const { return bucket_size() - 1; }
-
-    /// From the hash value, get the bucket id (first index) in the join hash table.
-    size_t place(size_t x) const { return x & mask(); }
-
-    /// Whether the join hash table is full. You need to increase the size of the hash table, or remove something unnecessary from it.
-    bool overflow(size_t elems) const { return elems >= max_fill(); }
-
-    /// Increase the size of the join hash table.
-    void increase_size() { size_degree += size_degree >= 23 ? 1 : 2; }
-
-    /// Set the buffer size by the number of elements in the join hash table. Used when deserializing a join hash table.
-    void set(size_t num_elems) {
-#ifndef STRICT_MEMORY_USE
-        size_t fill_capacity = static_cast<size_t>(log2(num_elems - 1)) + 2;
-#else
-        size_t fill_capacity = static_cast<size_t>(log2(num_elems - 1)) + 1;
-        fill_capacity =
-                fill_capacity < double_grow_degree
-                        ? fill_capacity + 1
-                        : (num_elems < (1ULL << fill_capacity) - (1ULL << (fill_capacity - 2))
-                                   ? fill_capacity
-                                   : fill_capacity + 1);
-#endif
-        size_degree = num_elems <= 1 ? initial_size_degree
-                                     : (initial_size_degree > fill_capacity ? initial_size_degree
-                                                                            : fill_capacity);
-    }
-
-    void set_buf_size(size_t buf_size_) {
-        size_degree = static_cast<size_t>(log2(buf_size_ - 1) + 1);
-    }
-};
-
-/** Determines the size of the join hash table, and when and how much it should be resized.
-  * This structure is aligned to cache line boundary and also occupies it all.
-  * Precalculates some values to speed up lookups and insertion into the JoinHashTable (and thus has bigger memory footprint than JoinHashTableGrower).
-  */
-template <size_t initial_size_degree = 8>
-class alignas(64) JoinHashTableGrowerWithPrecalculation {
-    /// The state of this structure is enough to get the buffer size of the join hash table.
-
-    doris::vectorized::UInt8 size_degree_ = initial_size_degree;
-    size_t precalculated_mask = (1ULL << (initial_size_degree - 1)) - 1;
-    size_t precalculated_max_fill = 1ULL << initial_size_degree;
-
-public:
-    doris::vectorized::UInt8 size_degree() const { return size_degree_; }
-
-    void increase_size_degree(doris::vectorized::UInt8 delta) {
-        size_degree_ += delta;
-        precalculated_mask = (1ULL << (size_degree_ - 1)) - 1;
-        precalculated_max_fill = 1ULL << size_degree_;
-    }
-
-    static constexpr auto initial_count = 1ULL << initial_size_degree;
-
-    /// If collision resolution chains are contiguous, we can implement erase operation by moving the elements.
-    static constexpr auto performs_linear_probing_with_single_step = true;
-
-    size_t bucket_size() const { return 1ULL << (size_degree_ - 1); }
-
-    /// The size of the join hash table in the cells.
-    size_t buf_size() const { return 1ULL << size_degree_; }
-
-    /// From the hash value, get the cell number in the join hash table.
-    size_t place(size_t x) const { return x & precalculated_mask; }
-
-    /// Whether the join hash table is full. You need to increase the size of the hash table, or remove something unnecessary from it.
-    bool overflow(size_t elems) const { return elems >= precalculated_max_fill; }
-
-    /// Increase the size of the join hash table.
-    void increase_size() { increase_size_degree(size_degree_ >= 23 ? 1 : 2); }
-
-    /// Set the buffer size by the number of elements in the join hash table. Used when deserializing a join hash table.
-    void set(size_t num_elems) {
-        size_degree_ =
-                num_elems <= 1
-                        ? initial_size_degree
-                        : ((initial_size_degree > static_cast<size_t>(log2(num_elems - 1)) + 2)
-                                   ? initial_size_degree
-                                   : (static_cast<size_t>(log2(num_elems - 1)) + 2));
-        increase_size_degree(0);
-    }
-
-    void set_buf_size(size_t buf_size_) {
-        size_degree_ = static_cast<size_t>(log2(buf_size_ - 1) + 1);
-        increase_size_degree(0);
-    }
-};
-
-static_assert(sizeof(JoinHashTableGrowerWithPrecalculation<>) == 64);
-
-/** When used as a Grower, it turns a hash table into something like a lookup table.
-  * It remains non-optimal - the cells store the keys.
-  * Also, the compiler can not completely remove the code of passing through the collision resolution chain, although it is not needed.
-  * TODO Make a proper lookup table.
-  */
-template <size_t key_bits>
-struct JoinHashTableFixedGrower {
-    size_t bucket_size() const { return 1ULL << (key_bits - 1); }
-    size_t buf_size() const { return 1ULL << key_bits; }
-    size_t place(size_t x) const { return x & (bucket_size() - 1); }
-    bool overflow(size_t /*elems*/) const { return false; }
-
-    void increase_size() { __builtin_unreachable(); }
-    void set(size_t /*num_elems*/) {}
-    void set_buf_size(size_t /*buf_size_*/) {}
-};
-
-template <typename Key, typename Cell, typename Hash, typename Grower, typename Allocator>
-class JoinHashTable : private boost::noncopyable,
-                      protected Hash,
-                      protected Allocator,
-                      protected Cell::State,
-                      protected ZeroValueStorage<Cell::need_zero_value_storage,
-                                                 Cell> /// empty base optimization
-{
-protected:
-    friend class const_iterator;
-    friend class iterator;
-    friend class Reader;
-
-    template <typename, typename, typename, typename, typename, typename, size_t>
-    friend class TwoLevelHashTable;
-
-    template <typename SubMaps>
-    friend class StringHashTable;
-
-    using HashValue = size_t;
-    using Self = JoinHashTable;
-    using cell_type = Cell;
-
-    size_t m_size = 0;         /// Amount of elements
-    size_t m_no_zero_size = 0; /// Amount of elements except the element with zero key.
-    Cell* buf; /// A piece of memory for all elements except the element with zero key.
-
-    // bucket-chained hash table
-    // "first" is the buckets of the hash map, and it holds the index of the first key value saved in each bucket,
-    // while other keys can be found by following the indices saved in
-    // "next". "next[0]" represents the end of the list of keys in a bucket.
-    // https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487
-    size_t* first;
-    size_t* next;
-
-    Grower grower;
-    int64_t _resize_timer_ns;
-
-    //factor that will trigger growing the hash table on insert.
-    static constexpr float MAX_BUCKET_OCCUPANCY_FRACTION = 1.0f;
-
-#ifdef DBMS_HASH_MAP_COUNT_COLLISIONS
-    mutable size_t collisions = 0;
-#endif
-
-    /// Find a cell with the same key or an empty cell, starting from the specified position and further along the collision resolution chain.
-    size_t ALWAYS_INLINE find_cell(const Key& x, size_t hash_value, size_t place_value) const {
-        while (place_value && !buf[place_value - 1].is_zero(*this) &&
-               !buf[place_value - 1].key_equals(x, hash_value, *this)) {
-            place_value = next[place_value];
-#ifdef DBMS_HASH_MAP_COUNT_COLLISIONS
-            ++collisions;
-#endif
-        }
-
-        return place_value;
-    }
-
-    std::pair<bool, size_t> ALWAYS_INLINE find_cell_opt(const Key& x, size_t hash_value,
-                                                        size_t place_value) const {
-        bool is_zero = false;
-        do {
-            if (!place_value) return {true, place_value};
-            is_zero = buf[place_value - 1].is_zero(*this); ///
-            if (is_zero || buf[place_value - 1].key_equals(x, hash_value, *this)) break;
-            place_value = next[place_value];
-        } while (true);
-
-        return {is_zero, place_value};
-    }
-
-    /// Find an empty cell, starting with the specified position and further along the collision resolution chain.
-    size_t ALWAYS_INLINE find_empty_cell(size_t place_value) const {
-        while (place_value && !buf[place_value - 1].is_zero(*this)) {
-            place_value = next[place_value];
-#ifdef DBMS_HASH_MAP_COUNT_COLLISIONS
-            ++collisions;
-#endif
-        }
-
-        return place_value;
-    }
-
-    void alloc(const Grower& new_grower) {
-        buf = reinterpret_cast<Cell*>(Allocator::alloc(new_grower.buf_size() * sizeof(Cell)));
-        first = reinterpret_cast<size_t*>(
-                Allocator::alloc(new_grower.bucket_size() * sizeof(size_t)));
-        memset(first, 0, new_grower.bucket_size() * sizeof(size_t));
-        next = reinterpret_cast<size_t*>(
-                Allocator::alloc((new_grower.buf_size() + 1) * sizeof(size_t)));
-        memset(next, 0, (new_grower.buf_size() + 1) * sizeof(size_t));
-        grower = new_grower;
-    }
-
-    void free() {
-        if (buf) {
-            Allocator::free(buf, get_buffer_size_in_bytes());
-            buf = nullptr;
-        }
-        if (first) {
-            Allocator::free(first, grower.bucket_size() * sizeof(size_t));
-            first = nullptr;
-        }
-        if (next) {
-            Allocator::free(next, (grower.buf_size() + 1) * sizeof(size_t));
-            next = nullptr;
-        }
-    }
-
-    /// Increase the size of the buffer.
-    void resize(size_t for_num_elems = 0, size_t for_buf_size = 0) {
-        SCOPED_RAW_TIMER(&_resize_timer_ns);
-#ifdef DBMS_HASH_MAP_DEBUG_RESIZES
-        Stopwatch watch;
-#endif
-
-        size_t old_size = grower.buf_size();
-
-        /** In case of exception for the object to remain in the correct state,
-          *  changing the variable `grower` (which determines the buffer size of the hash table)
-          *  is postponed for a moment after a real buffer change.
-          * The temporary variable `new_grower` is used to determine the new size.
-          */
-        Grower new_grower = grower;
-        if (for_num_elems) {
-            new_grower.set(for_num_elems);
-            if (new_grower.buf_size() <= old_size) return;
-        } else if (for_buf_size) {
-            new_grower.set_buf_size(for_buf_size);
-            if (new_grower.buf_size() <= old_size) return;
-        } else
-            new_grower.increase_size();
-
-        /// Expand the space.
-        buf = reinterpret_cast<Cell*>(Allocator::realloc(buf, get_buffer_size_in_bytes(),
-                                                         new_grower.buf_size() * sizeof(Cell)));
-        first = reinterpret_cast<size_t*>(Allocator::realloc(
-                first, get_bucket_size_in_bytes(), new_grower.bucket_size() * sizeof(size_t)));
-        memset(first, 0, new_grower.bucket_size() * sizeof(size_t));
-        next = reinterpret_cast<size_t*>(Allocator::realloc(
-                next, get_buffer_size_in_bytes(), (new_grower.buf_size() + 1) * sizeof(size_t)));
-        memset(next, 0, (new_grower.buf_size() + 1) * sizeof(size_t));
-        grower = new_grower;
-
-        /** Now some items may need to be moved to a new location.
-          * The element can stay in place, or move to a new location "on the right",
-          *  or move to the left of the collision resolution chain, because the elements to the left of it have been moved to the new "right" location.
-          */
-        size_t i = 0;
-        for (; i < m_no_zero_size; ++i)
-            if (!buf[i].is_zero(*this)) reinsert(i + 1, buf[i], buf[i].get_hash(*this));
-
-#ifdef DBMS_HASH_MAP_DEBUG_RESIZES
-        watch.stop();
-        std::cerr << std::fixed << std::setprecision(3) << "Resize from " << old_size << " to "
-                  << grower.buf_size() << " took " << watch.elapsedSeconds() << " sec."
-                  << std::endl;
-#endif
-    }
-
-    /** Paste into the new buffer the value that was in the old buffer.
-      * Used when increasing the buffer size.
-      */
-    void reinsert(size_t place_value, Cell& x, size_t hash_value) {
-        size_t bucket_value = grower.place(hash_value);
-        next[place_value] = first[bucket_value];
-        first[bucket_value] = place_value;
-    }
-
-    void destroy_elements() {
-        if (!std::is_trivially_destructible_v<Cell>)
-            for (iterator it = begin(), it_end = end(); it != it_end; ++it) it.ptr->~Cell();
-    }
-
-    template <typename Derived, bool is_const>
-    class iterator_base {
-        using Container = std::conditional_t<is_const, const Self, Self>;
-        using cell_type = std::conditional_t<is_const, const Cell, Cell>;
-
-        Container* container;
-        cell_type* ptr;
-
-        friend class JoinHashTable;
-
-    public:
-        iterator_base() {}
-        iterator_base(Container* container_, cell_type* ptr_) : container(container_), ptr(ptr_) {}
-
-        bool operator==(const iterator_base& rhs) const { return ptr == rhs.ptr; }
-        bool operator!=(const iterator_base& rhs) const { return ptr != rhs.ptr; }
-
-        Derived& operator++() {
-            /// If iterator was pointed to ZeroValueStorage, move it to the beginning of the main buffer.
-            if (UNLIKELY(ptr->is_zero(*container)))
-                ptr = container->buf;
-            else
-                ++ptr;
-
-            /// Skip empty cells in the main buffer.
-            auto buf_end = container->buf + container->m_no_zero_size;
-            while (ptr < buf_end && ptr->is_zero(*container)) ++ptr;
-
-            return static_cast<Derived&>(*this);
-        }
-
-        auto& operator*() const { return *ptr; }
-        auto* operator->() const { return ptr; }
-
-        auto get_ptr() const { return ptr; }
-        size_t get_hash() const { return ptr->get_hash(*container); }
-
-        size_t get_collision_chain_length() const { ////////////// ?????????
-            return 0;
-        }
-
-        operator Cell*() const { return nullptr; }
-    };
-
+#include <gen_cpp/PlanNodes_types.h>
+
+#include <limits>
+
+#include "common/exception.h"
+#include "common/status.h"
+#include "vec/columns/column_filter_helper.h"
+#include "vec/common/hash_table/hash.h"
+#include "vec/common/hash_table/hash_table_allocator.h"
+
+namespace doris {
+template <typename Key, typename Hash = DefaultHash<Key>>
+class JoinHashTable {
 public:
     using key_type = Key;
-    using value_type = typename Cell::value_type;
+    using mapped_type = void*;
+    using value_type = void*;
+    size_t hash(const Key& x) const { return Hash()(x); }
 
-    // Use lookup_result_get_mapped/Key to work with these values.
-    using LookupResult = Cell*;
-    using ConstLookupResult = const Cell*;
-
-    void reset_resize_timer() { _resize_timer_ns = 0; }
-    int64_t get_resize_timer_value() const { return _resize_timer_ns; }
-
-    size_t hash(const Key& x) const { return Hash::operator()(x); }
-
-    JoinHashTable() {
-        if (Cell::need_zero_value_storage) this->zero_value()->set_zero();
-        alloc(grower);
+    static uint32_t calc_bucket_size(size_t num_elem) {
+        size_t expect_bucket_size = num_elem + (num_elem - 1) / 7;
+        return std::min(phmap::priv::NormalizeCapacity(expect_bucket_size) + 1,
+                        static_cast<size_t>(std::numeric_limits<int32_t>::max()) + 1);
     }
 
-    JoinHashTable(size_t reserve_for_num_elements) {
-        if (Cell::need_zero_value_storage) this->zero_value()->set_zero();
-        grower.set(reserve_for_num_elements);
-        alloc(grower);
+    size_t get_byte_size() const {
+        auto cal_vector_mem = [](const auto& vec) { return vec.capacity() * sizeof(vec[0]); };
+        return cal_vector_mem(visited) + cal_vector_mem(first) + cal_vector_mem(next);
     }
 
-    JoinHashTable(JoinHashTable&& rhs) : buf(nullptr) { *this = std::move(rhs); }
+    template <int JoinOpType>
+    void prepare_build(size_t num_elem, int batch_size, bool has_null_key) {
+        _has_null_key = has_null_key;
 
-    ~JoinHashTable() {
-        destroy_elements();
-        free();
+        // the first row in build side is not really from build side table
+        _empty_build_side = num_elem <= 1;
+        max_batch_size = batch_size;
+        bucket_size = calc_bucket_size(num_elem + 1);
+        first.resize(bucket_size + 1);
+        next.resize(num_elem);
+
+        if constexpr (JoinOpType == TJoinOp::FULL_OUTER_JOIN ||
+                      JoinOpType == TJoinOp::RIGHT_OUTER_JOIN ||
+                      JoinOpType == TJoinOp::RIGHT_ANTI_JOIN ||
+                      JoinOpType == TJoinOp::RIGHT_SEMI_JOIN) {
+            visited.resize(num_elem);
+        }
     }
 
-    JoinHashTable& operator=(JoinHashTable&& rhs) {
-        destroy_elements();
-        free();
+    uint32_t get_bucket_size() const { return bucket_size; }
 
-        std::swap(buf, rhs.buf);
-        std::swap(m_size, rhs.m_size);
-        std::swap(m_no_zero_size, rhs.m_no_zero_size);
-        std::swap(first, rhs.first);
-        std::swap(next, rhs.next);
-        std::swap(grower, rhs.grower);
+    size_t size() const { return next.size(); }
 
-        Hash::operator=(std::move(rhs));
-        Allocator::operator=(std::move(rhs));
-        Cell::State::operator=(std::move(rhs));
-        ZeroValueStorage<Cell::need_zero_value_storage, Cell>::operator=(std::move(rhs));
+    std::vector<uint8_t>& get_visited() { return visited; }
 
-        return *this;
+    bool empty_build_side() const { return _empty_build_side; }
+
+    void build(const Key* __restrict keys, const uint32_t* __restrict bucket_nums, size_t num_elem,
+               bool keep_null_key) {
+        build_keys = keys;
+        for (size_t i = 1; i < num_elem; i++) {
+            uint32_t bucket_num = bucket_nums[i];
+            next[i] = first[bucket_num];
+            first[bucket_num] = i;
+        }
+        if (!keep_null_key) {
+            first[bucket_size] = 0; // index = bucket_size means null
+        }
+        _keep_null_key = keep_null_key;
     }
 
-    class iterator : public iterator_base<iterator, false> {
-    public:
-        using iterator_base<iterator, false>::iterator_base;
-    };
-
-    class const_iterator : public iterator_base<const_iterator, true> {
-    public:
-        using iterator_base<const_iterator, true>::iterator_base;
-    };
-
-    const_iterator begin() const {
-        if (!buf) return end();
-
-        if (this->get_has_zero()) return iterator_to_zero();
-
-        const Cell* ptr = buf;
-        auto buf_end = buf + m_no_zero_size;
-        while (ptr < buf_end && ptr->is_zero(*this)) ++ptr;
-
-        return const_iterator(this, ptr);
-    }
-
-    const_iterator cbegin() const { return begin(); }
-
-    iterator begin() {
-        if (!buf) return end();
-
-        if (this->get_has_zero()) return iterator_to_zero();
-
-        Cell* ptr = buf;
-        auto buf_end = buf + m_no_zero_size;
-        while (ptr < buf_end && ptr->is_zero(*this)) ++ptr;
-
-        return iterator(this, ptr);
-    }
-
-    const_iterator end() const { return const_iterator(this, buf + m_no_zero_size); }
-    const_iterator cend() const { return end(); }
-    iterator end() { return iterator(this, buf + m_no_zero_size); }
-
-protected:
-    const_iterator iterator_to(const Cell* ptr) const { return const_iterator(this, ptr); }
-    iterator iterator_to(Cell* ptr) { return iterator(this, ptr); }
-    const_iterator iterator_to_zero() const { return iterator_to(this->zero_value()); }
-    iterator iterator_to_zero() { return iterator_to(this->zero_value()); }
-
-    /// If the key is zero, insert it into a special place and return true.
-    /// We don't have to persist a zero key, because it's not actually inserted.
-    /// That's why we just take a Key by value, an not a key holder.
-    bool ALWAYS_INLINE emplace_if_zero(Key x, LookupResult& it, bool& inserted, size_t hash_value) {
-        /// If it is claimed that the zero key can not be inserted into the table.
-        if (!Cell::need_zero_value_storage) return false;
-
-        if (Cell::is_zero(x, *this)) {
-            it = this->zero_value();
-
-            if (!this->get_has_zero()) {
-                ++m_size;
-                this->set_get_has_zero();
-                this->zero_value()->set_hash(hash_value);
-                inserted = true;
-            } else
-                inserted = false;
-
-            return true;
+    template <int JoinOpType>
+    auto find_batch(const Key* __restrict keys, const uint32_t* __restrict build_idx_map,
+                    int probe_idx, uint32_t build_idx, int probe_rows,
+                    uint32_t* __restrict probe_idxs, bool& probe_visited,
+                    uint32_t* __restrict build_idxs, const uint8_t* null_map,
+                    bool with_other_conjuncts, bool is_mark_join, bool has_mark_join_conjunct) {
+        if ((JoinOpType == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN ||
+             JoinOpType == TJoinOp::NULL_AWARE_LEFT_SEMI_JOIN) &&
+            _empty_build_side) {
+            return _process_null_aware_left_half_join_for_empty_build_side<JoinOpType>(
+                    probe_idx, probe_rows, probe_idxs, build_idxs);
         }
 
-        return false;
-    }
-
-    /// Only for non-zero keys. Find the right place, insert the key there, if it does not already exist. Set iterator to the cell in output parameter.
-    template <typename KeyHolder>
-    void ALWAYS_INLINE emplace_non_zero(KeyHolder&& key_holder, LookupResult& it, bool& inserted,
-                                        size_t hash_value) {
-        it = &buf[m_no_zero_size];
-
-        if (!buf[m_no_zero_size].is_zero(*this)) {
-            key_holder_discard_key(key_holder);
-            inserted = false;
-            return;
+        if (with_other_conjuncts) {
+            return _find_batch_conjunct<JoinOpType, false>(
+                    keys, build_idx_map, probe_idx, build_idx, probe_rows, probe_idxs, build_idxs);
         }
 
-        key_holder_persist_key(key_holder);
-        const auto& key = key_holder_get_key(key_holder);
+        if (is_mark_join && JoinOpType != TJoinOp::RIGHT_SEMI_JOIN) {
+            bool is_null_aware_join = JoinOpType == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN ||
+                                      JoinOpType == TJoinOp::NULL_AWARE_LEFT_SEMI_JOIN;
+            bool is_left_half_join =
+                    JoinOpType == TJoinOp::LEFT_SEMI_JOIN || JoinOpType == TJoinOp::LEFT_ANTI_JOIN;
 
-        new (&buf[m_no_zero_size]) Cell(key, *this);
-        buf[m_no_zero_size].set_hash(hash_value);
-        size_t bucket_value = grower.place(hash_value);
-        inserted = true;
-        ++m_size;
-        ++m_no_zero_size;
-        next[m_no_zero_size] = first[bucket_value];
-        first[bucket_value] = m_no_zero_size;
+            /// For null aware join or left half(semi/anti) join without other conjuncts and without
+            /// mark join conjunct.
+            /// If one row on probe side has one match in build side, we should stop searching the
+            /// hash table for this row.
+            if (is_null_aware_join || (is_left_half_join && !has_mark_join_conjunct)) {
+                return _find_batch_conjunct<JoinOpType, true>(keys, build_idx_map, probe_idx,
+                                                              build_idx, probe_rows, probe_idxs,
+                                                              build_idxs);
+            }
 
-        if (UNLIKELY(grower.overflow(m_size))) {
-            try {
-                resize();
-            } catch (...) {
-                /** If we have not resized successfully, then there will be problems.
-                  * There remains a key, but uninitialized mapped-value,
-                  *  which, perhaps, can not even be called a destructor.
-                  */
-                first[bucket_value] = next[m_no_zero_size];
-                next[m_no_zero_size] = 0;
-                --m_size;
-                --m_no_zero_size;
-                buf[m_no_zero_size].set_zero();
-                throw;
+            return _find_batch_conjunct<JoinOpType, false>(
+                    keys, build_idx_map, probe_idx, build_idx, probe_rows, probe_idxs, build_idxs);
+        }
+
+        if (JoinOpType == TJoinOp::INNER_JOIN || JoinOpType == TJoinOp::FULL_OUTER_JOIN ||
+            JoinOpType == TJoinOp::LEFT_OUTER_JOIN || JoinOpType == TJoinOp::RIGHT_OUTER_JOIN) {
+            return _find_batch_inner_outer_join<JoinOpType>(keys, build_idx_map, probe_idx,
+                                                            build_idx, probe_rows, probe_idxs,
+                                                            probe_visited, build_idxs);
+        }
+        if (JoinOpType == TJoinOp::LEFT_ANTI_JOIN || JoinOpType == TJoinOp::LEFT_SEMI_JOIN ||
+            JoinOpType == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN) {
+            if (null_map) {
+                return _find_batch_left_semi_anti<JoinOpType, true>(
+                        keys, build_idx_map, probe_idx, probe_rows, probe_idxs, null_map);
+            } else {
+                return _find_batch_left_semi_anti<JoinOpType, false>(
+                        keys, build_idx_map, probe_idx, probe_rows, probe_idxs, nullptr);
             }
         }
+        if (JoinOpType == TJoinOp::RIGHT_ANTI_JOIN || JoinOpType == TJoinOp::RIGHT_SEMI_JOIN) {
+            return _find_batch_right_semi_anti(keys, build_idx_map, probe_idx, probe_rows);
+        }
+        throw Exception(ErrorCode::INTERNAL_ERROR, "meet invalid hash join input");
     }
 
-public:
-    void expanse_for_add_elem(size_t num_elem) {
-        std::cout << "expanse_for_add_elem\n";
-        if (add_elem_size_overflow(num_elem)) {
-            resize(grower.buf_size() + num_elem);
+    /**
+     * Because the equality comparison result of null with any value is null,
+     * in null aware join, if the probe key of a row in the left table(probe side) is null,
+     * then this row will match all rows on the right table(build side) (the match result is null).
+     * If the probe key of a row in the left table does not match any row in right table,
+     * this row will match all rows with null key in the right table.
+     * select 'a' in ('b', null) => 'a' = 'b' or 'a' = null => false or null => null
+     * select 'a' in ('a', 'b', null) => true
+     * select 'a' not in ('b', null) => null => 'a' != 'b' and 'a' != null => true and null => null
+     * select 'a' not in ('a', 'b', null) => false
+     */
+    auto find_null_aware_with_other_conjuncts(const Key* __restrict keys,
+                                              const uint32_t* __restrict build_idx_map,
+                                              int probe_idx, uint32_t build_idx, int probe_rows,
+                                              uint32_t* __restrict probe_idxs,
+                                              uint32_t* __restrict build_idxs,
+                                              uint8_t* __restrict null_flags,
+                                              bool picking_null_keys, const uint8_t* null_map) {
+        if (null_map) {
+            return _find_null_aware_with_other_conjuncts_impl<true>(
+                    keys, build_idx_map, probe_idx, build_idx, probe_rows, probe_idxs, build_idxs,
+                    null_flags, picking_null_keys, null_map);
+        } else {
+            return _find_null_aware_with_other_conjuncts_impl<false>(
+                    keys, build_idx_map, probe_idx, build_idx, probe_rows, probe_idxs, build_idxs,
+                    null_flags, picking_null_keys, nullptr);
         }
     }
 
-    /// Insert a value. In the case of any more complex values, it is better to use the `emplace` function.
-    std::pair<LookupResult, bool> ALWAYS_INLINE insert(const value_type& x) {
-        std::pair<LookupResult, bool> res;
-        size_t hash_value = hash(Cell::get_key(x));
-        if (!emplace_if_zero(Cell::get_key(x), res.first, res.second, hash_value)) {
-            emplace_non_zero(Cell::get_key(x), res.first, res.second, hash_value);
+    template <int JoinOpType, bool is_mark_join>
+    bool iterate_map(std::vector<uint32_t>& build_idxs,
+                     vectorized::ColumnFilterHelper* mark_column_helper) const {
+        const auto batch_size = max_batch_size;
+        const auto elem_num = visited.size();
+        int count = 0;
+        build_idxs.resize(batch_size);
+
+        while (count < batch_size && iter_idx < elem_num) {
+            const auto matched = visited[iter_idx];
+            build_idxs[count] = iter_idx;
+            if constexpr (JoinOpType == TJoinOp::RIGHT_SEMI_JOIN) {
+                if constexpr (is_mark_join) {
+                    mark_column_helper->insert_value(matched);
+                    ++count;
+                } else {
+                    count += matched;
+                }
+            } else {
+                count += !matched;
+            }
+            iter_idx++;
         }
 
-        if (res.second) insert_set_mapped(lookup_result_get_mapped(res.first), x);
-
-        return res;
+        build_idxs.resize(count);
+        return iter_idx >= elem_num;
     }
 
-    template <typename KeyHolder>
-    void ALWAYS_INLINE prefetch(KeyHolder& key_holder) {
-        key_holder_get_key(key_holder);
-        __builtin_prefetch(&buf[m_no_zero_size]);
-    }
+    bool has_null_key() { return _has_null_key; }
 
-    /// Reinsert node pointed to by iterator
-    // void ALWAYS_INLINE reinsert(iterator& it, size_t hash_value) {
-    //     reinsert(*it.get_ptr(), hash_value);
-    // }
+    bool keep_null_key() { return _keep_null_key; }
 
-    /** Insert the key.
-      * Return values:
-      * 'it' -- a LookupResult pointing to the corresponding key/mapped pair.
-      * 'inserted' -- whether a new key was inserted.
-      *
-      * You have to make `placement new` of value if you inserted a new key,
-      * since when destroying a hash table, it will call the destructor!
-      *
-      * Example usage:
-      *
-      * Map::iterator it;
-      * bool inserted;
-      * map.emplace(key, it, inserted);
-      * if (inserted)
-      *     new(&it->second) Mapped(value);
-      */
-    template <typename KeyHolder>
-    void ALWAYS_INLINE emplace(KeyHolder&& key_holder, LookupResult& it, bool& inserted) {
-        const auto& key = key_holder_get_key(key_holder);
-        emplace(key_holder, it, inserted, hash(key));
-    }
-
-    template <typename KeyHolder>
-    void ALWAYS_INLINE emplace(KeyHolder&& key_holder, LookupResult& it, bool& inserted,
-                               size_t hash_value) {
-        const auto& key = key_holder_get_key(key_holder);
-        if (!emplace_if_zero(key, it, inserted, hash_value))
-            emplace_non_zero(key_holder, it, inserted, hash_value);
-    }
-
-    /// Copy the cell from another hash table. It is assumed that the cell is not zero, and also that there was no such key in the table yet.
-    void ALWAYS_INLINE insert_unique_non_zero(const Cell* cell, size_t hash_value) {
-        memcpy(static_cast<void*>(&buf[m_no_zero_size]), cell, sizeof(*cell));
-        size_t bucket_value = grower.place();
-        ++m_size;
-        ++m_no_zero_size;
-        next[m_no_zero_size] = first[bucket_value];
-        first[bucket_value] = m_no_zero_size;
-
-        if (UNLIKELY(grower.overflow(m_size))) resize();
-    }
-
-    LookupResult ALWAYS_INLINE find(Key x) {
-        if (Cell::is_zero(x, *this)) return this->get_has_zero() ? this->zero_value() : nullptr;
-
-        size_t hash_value = hash(x);
-        auto [is_zero, place_value] = find_cell_opt(x, hash_value, first[grower.place(hash_value)]);
-
-        if (!place_value) return nullptr;
-
-        return !is_zero ? &buf[place_value - 1] : nullptr;
-    }
-
-    ConstLookupResult ALWAYS_INLINE find(Key x) const {
-        return const_cast<std::decay_t<decltype(*this)>*>(this)->find(x);
-    }
-
-    LookupResult ALWAYS_INLINE find(Key x, size_t hash_value) {
-        if (Cell::is_zero(x, *this)) return this->get_has_zero() ? this->zero_value() : nullptr;
-
-        size_t place_value = find_cell(x, hash_value, first[grower.place(hash_value)]);
-
-        if (!place_value) return nullptr;
-
-        return !buf[place_value - 1].is_zero(*this) ? &buf[place_value - 1] : nullptr;
-    }
-
-    bool ALWAYS_INLINE has(Key x) const {
-        if (Cell::is_zero(x, *this)) return this->get_has_zero();
-
-        size_t hash_value = hash(x);
-        size_t place_value = find_cell(x, hash_value, first[grower.place(hash_value)]);
-        return !place_value && !buf[place_value - 1].is_zero(*this);
-    }
-
-    bool ALWAYS_INLINE has(Key x, size_t hash_value) const {
-        if (Cell::is_zero(x, *this)) return this->get_has_zero();
-
-        size_t place_value = find_cell(x, hash_value, first[grower.place(hash_value)]);
-        return !place_value && !buf[place_value - 1].is_zero(*this);
-    }
-
-    void write(doris::vectorized::BufferWritable& wb) const {
-        Cell::State::write(wb);
-        doris::vectorized::write_var_uint(m_size, wb);
-
-        if (this->get_has_zero()) this->zero_value()->write(wb);
-
-        for (auto ptr = buf, buf_end = buf + m_no_zero_size; ptr < buf_end; ++ptr)
-            if (!ptr->is_zero(*this)) ptr->write(wb);
-    }
-
-    void read(doris::vectorized::BufferReadable& rb) {
-        Cell::State::read(rb);
-
-        destroy_elements();
-        this->clear_get_has_zero();
-        m_size = 0;
-
-        size_t new_size = 0;
-        doris::vectorized::read_var_uint(new_size, rb);
-
-        free();
-        Grower new_grower = grower;
-        new_grower.set(new_size);
-        alloc(new_grower);
-
-        for (size_t i = 0; i < new_size; ++i) {
-            Cell x;
-            x.read(rb);
-            insert(Cell::get_key(x.get_value()));
+    void pre_build_idxs(std::vector<uint32>& buckets) const {
+        for (unsigned int& bucket : buckets) {
+            bucket = first[bucket];
         }
     }
 
-    size_t size() const { return m_size; }
-
-    size_t no_zero_size() const { return m_no_zero_size; }
-
-    bool empty() const { return 0 == m_size; }
-
-    float get_factor() const { return MAX_BUCKET_OCCUPANCY_FRACTION; }
-
-    bool should_be_shrink(int64_t valid_row) { return valid_row < get_factor() * (size() / 2.0); }
-
-    void init_buf_size(size_t reserve_for_num_elements) {
-        free();
-        grower.set(reserve_for_num_elements);
-        alloc(grower);
-    }
-
-    void delete_zero_key(Key key) {
-        if (this->get_has_zero() && Cell::is_zero(key, *this)) {
-            --m_size;
-            this->clear_get_has_zero();
+private:
+    template <int JoinOpType>
+    auto _process_null_aware_left_half_join_for_empty_build_side(int probe_idx, int probe_rows,
+                                                                 uint32_t* __restrict probe_idxs,
+                                                                 uint32_t* __restrict build_idxs) {
+        if (JoinOpType != TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN &&
+            JoinOpType != TJoinOp::NULL_AWARE_LEFT_SEMI_JOIN) {
+            throw Exception(ErrorCode::INTERNAL_ERROR,
+                            "process_null_aware_left_half_join_for_empty_build_side meet invalid "
+                            "hash join input");
         }
+        uint32_t matched_cnt = 0;
+        const auto batch_size = max_batch_size;
+
+        while (probe_idx < probe_rows && matched_cnt < batch_size) {
+            probe_idxs[matched_cnt] = probe_idx++;
+            build_idxs[matched_cnt] = 0;
+            ++matched_cnt;
+        }
+
+        return std::tuple {probe_idx, 0U, matched_cnt};
     }
 
-    void clear() {
-        destroy_elements();
-        this->clear_get_has_zero();
-        m_size = 0;
-        m_no_zero_size = 0;
+    auto _find_batch_right_semi_anti(const Key* __restrict keys,
+                                     const uint32_t* __restrict build_idx_map, int probe_idx,
+                                     int probe_rows) {
+        while (probe_idx < probe_rows) {
+            auto build_idx = build_idx_map[probe_idx];
 
-        memset(static_cast<void*>(buf), 0, grower.buf_size() * sizeof(*buf));
+            while (build_idx) {
+                if (!visited[build_idx] && keys[probe_idx] == build_keys[build_idx]) {
+                    visited[build_idx] = 1;
+                }
+                build_idx = next[build_idx];
+            }
+            probe_idx++;
+        }
+        return std::tuple {probe_idx, 0U, 0U};
     }
 
-    /// After executing this function, the table can only be destroyed,
-    ///  and also you can use the methods `size`, `empty`, `begin`, `end`.
-    void clear_and_shrink() {
-        destroy_elements();
-        this->clear_get_has_zero();
-        m_size = 0;
-        m_no_zero_size = 0;
-        free();
+    template <int JoinOpType, bool has_null_map>
+    auto _find_batch_left_semi_anti(const Key* __restrict keys,
+                                    const uint32_t* __restrict build_idx_map, int probe_idx,
+                                    int probe_rows, uint32_t* __restrict probe_idxs,
+                                    const uint8_t* null_map) {
+        uint32_t matched_cnt = 0;
+        const auto batch_size = max_batch_size;
+
+        while (probe_idx < probe_rows && matched_cnt < batch_size) {
+            if constexpr (JoinOpType == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN && has_null_map) {
+                if (null_map[probe_idx]) {
+                    probe_idx++;
+                    continue;
+                }
+            }
+
+            auto build_idx = build_idx_map[probe_idx];
+
+            while (build_idx && keys[probe_idx] != build_keys[build_idx]) {
+                build_idx = next[build_idx];
+            }
+            bool matched = JoinOpType == TJoinOp::LEFT_SEMI_JOIN ? build_idx != 0 : build_idx == 0;
+            probe_idxs[matched_cnt] = probe_idx++;
+            matched_cnt += matched;
+        }
+        return std::tuple {probe_idx, 0U, matched_cnt};
     }
 
-    size_t get_buffer_size_in_bytes() const { return grower.buf_size() * sizeof(Cell); }
+    template <int JoinOpType, bool only_need_to_match_one>
+    auto _find_batch_conjunct(const Key* __restrict keys, const uint32_t* __restrict build_idx_map,
+                              int probe_idx, uint32_t build_idx, int probe_rows,
+                              uint32_t* __restrict probe_idxs, uint32_t* __restrict build_idxs) {
+        uint32_t matched_cnt = 0;
+        const auto batch_size = max_batch_size;
 
-    size_t get_bucket_size_in_bytes() const { return grower.bucket_size() * sizeof(Cell); }
+        auto do_the_probe = [&]() {
+            while (build_idx && matched_cnt < batch_size) {
+                if constexpr (JoinOpType == TJoinOp::RIGHT_ANTI_JOIN ||
+                              JoinOpType == TJoinOp::RIGHT_SEMI_JOIN) {
+                    if (!visited[build_idx] && keys[probe_idx] == build_keys[build_idx]) {
+                        probe_idxs[matched_cnt] = probe_idx;
+                        build_idxs[matched_cnt] = build_idx;
+                        matched_cnt++;
+                    }
+                }
 
-    size_t get_buffer_size_in_cells() const { return grower.buf_size(); }
+                if (keys[probe_idx] == build_keys[build_idx]) {
+                    build_idxs[matched_cnt] = build_idx;
+                    probe_idxs[matched_cnt] = probe_idx;
+                    matched_cnt++;
 
-    bool add_elem_size_overflow(size_t add_size) const {
-        return grower.overflow(add_size + m_size);
+                    if constexpr (only_need_to_match_one) {
+                        build_idx = 0;
+                        break;
+                    }
+                }
+                build_idx = next[build_idx];
+            }
+
+            if constexpr (JoinOpType == TJoinOp::LEFT_OUTER_JOIN ||
+                          JoinOpType == TJoinOp::FULL_OUTER_JOIN ||
+                          JoinOpType == TJoinOp::LEFT_SEMI_JOIN ||
+                          JoinOpType == TJoinOp::LEFT_ANTI_JOIN ||
+                          JoinOpType == doris::TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN ||
+                          JoinOpType == doris::TJoinOp::NULL_AWARE_LEFT_SEMI_JOIN) {
+                // may over batch_size when emplace 0 into build_idxs
+                if (!build_idx) {
+                    probe_idxs[matched_cnt] = probe_idx;
+                    build_idxs[matched_cnt] = 0;
+                    matched_cnt++;
+                }
+            }
+
+            probe_idx++;
+        };
+
+        if (build_idx) {
+            do_the_probe();
+        }
+
+        while (probe_idx < probe_rows && matched_cnt < batch_size) {
+            build_idx = build_idx_map[probe_idx];
+            do_the_probe();
+        }
+
+        probe_idx -= (build_idx != 0);
+        return std::tuple {probe_idx, build_idx, matched_cnt};
     }
-#ifdef DBMS_HASH_MAP_COUNT_COLLISIONS
-    size_t getCollisions() const { return collisions; }
-#endif
+
+    template <int JoinOpType>
+    auto _find_batch_inner_outer_join(const Key* __restrict keys,
+                                      const uint32_t* __restrict build_idx_map, int probe_idx,
+                                      uint32_t build_idx, int probe_rows,
+                                      uint32_t* __restrict probe_idxs, bool& probe_visited,
+                                      uint32_t* __restrict build_idxs) {
+        uint32_t matched_cnt = 0;
+        const auto batch_size = max_batch_size;
+
+        auto do_the_probe = [&]() {
+            while (build_idx && matched_cnt < batch_size) {
+                if (keys[probe_idx] == build_keys[build_idx]) {
+                    probe_idxs[matched_cnt] = probe_idx;
+                    build_idxs[matched_cnt] = build_idx;
+                    matched_cnt++;
+                    if constexpr (JoinOpType == TJoinOp::RIGHT_OUTER_JOIN ||
+                                  JoinOpType == TJoinOp::FULL_OUTER_JOIN) {
+                        if (!visited[build_idx]) {
+                            visited[build_idx] = 1;
+                        }
+                    }
+                }
+                build_idx = next[build_idx];
+            }
+
+            if constexpr (JoinOpType == TJoinOp::LEFT_OUTER_JOIN ||
+                          JoinOpType == TJoinOp::FULL_OUTER_JOIN) {
+                // `(!matched_cnt || probe_idxs[matched_cnt - 1] != probe_idx)` means not match one build side
+                probe_visited |= (matched_cnt && probe_idxs[matched_cnt - 1] == probe_idx);
+                if (!build_idx) {
+                    if (!probe_visited) {
+                        probe_idxs[matched_cnt] = probe_idx;
+                        build_idxs[matched_cnt] = 0;
+                        matched_cnt++;
+                    }
+                    probe_visited = false;
+                }
+            }
+            probe_idx++;
+        };
+
+        if (build_idx) {
+            do_the_probe();
+        }
+
+        while (probe_idx < probe_rows && matched_cnt < batch_size) {
+            build_idx = build_idx_map[probe_idx];
+            do_the_probe();
+        }
+
+        probe_idx -= (build_idx != 0);
+        return std::tuple {probe_idx, build_idx, matched_cnt};
+    }
+
+    template <bool has_null_map>
+    auto _find_null_aware_with_other_conjuncts_impl(
+            const Key* __restrict keys, const uint32_t* __restrict build_idx_map, int probe_idx,
+            uint32_t build_idx, int probe_rows, uint32_t* __restrict probe_idxs,
+            uint32_t* __restrict build_idxs, uint8_t* __restrict null_flags, bool picking_null_keys,
+            const uint8_t* null_map) {
+        uint32_t matched_cnt = 0;
+        const auto batch_size = max_batch_size;
+
+        auto do_the_probe = [&]() {
+            /// If no any rows match the probe key, here start to handle null keys in build side.
+            /// The result of "Any = null" is null.
+            if (build_idx == 0 && !picking_null_keys) {
+                build_idx = first[bucket_size];
+                picking_null_keys = true; // now pick null from build side
+            }
+
+            while (build_idx && matched_cnt < batch_size) {
+                if (picking_null_keys || keys[probe_idx] == build_keys[build_idx]) {
+                    build_idxs[matched_cnt] = build_idx;
+                    probe_idxs[matched_cnt] = probe_idx;
+                    null_flags[matched_cnt] = picking_null_keys;
+                    matched_cnt++;
+                }
+
+                build_idx = next[build_idx];
+
+                // If `build_idx` is 0, all matched keys are handled,
+                // now need to handle null keys in build side.
+                if (!build_idx && !picking_null_keys) {
+                    build_idx = first[bucket_size];
+                    picking_null_keys = true; // now pick null keys from build side
+                }
+            }
+
+            // may over batch_size when emplace 0 into build_idxs
+            if (!build_idx) {
+                probe_idxs[matched_cnt] = probe_idx;
+                build_idxs[matched_cnt] = 0;
+                picking_null_keys = false;
+                matched_cnt++;
+            }
+
+            probe_idx++;
+        };
+
+        if (build_idx) {
+            do_the_probe();
+        }
+
+        while (probe_idx < probe_rows && matched_cnt < batch_size) {
+            build_idx = build_idx_map[probe_idx];
+
+            /// If the probe key is null
+            if constexpr (has_null_map) {
+                if (null_map[probe_idx]) {
+                    probe_idx++;
+                    break;
+                }
+            }
+            do_the_probe();
+            if (picking_null_keys) {
+                break;
+            }
+        }
+
+        probe_idx -= (build_idx != 0);
+        return std::tuple {probe_idx, build_idx, matched_cnt, picking_null_keys};
+    }
+
+    const Key* __restrict build_keys;
+    std::vector<uint8_t> visited;
+
+    uint32_t bucket_size = 1;
+    int max_batch_size = 4064;
+
+    std::vector<uint32_t> first = {0};
+    std::vector<uint32_t> next = {0};
+
+    // use in iter hash map
+    mutable uint32_t iter_idx = 1;
+    vectorized::Arena* pool;
+    bool _has_null_key = false;
+    bool _keep_null_key = false;
+    bool _empty_build_side = true;
 };
+
+template <typename Key, typename Hash = DefaultHash<Key>>
+using JoinHashMap = JoinHashTable<Key, Hash>;
+} // namespace doris

@@ -16,44 +16,61 @@
 // under the License.
 #pragma once
 
-#include <queue>
+#include <glog/logging.h>
+#include <stddef.h>
+#include <stdint.h>
 
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <ostream>
+#include <queue>
+#include <set>
+
+#include "common/status.h"
 #include "pipeline_task.h"
 
-namespace doris {
-namespace pipeline {
+namespace doris::pipeline {
+#include "common/compile_check_begin.h"
 
-class SubWorkTaskQueue {
-    friend class WorkTaskQueue;
+class SubTaskQueue {
+    friend class PriorityTaskQueue;
 
 public:
     void push_back(PipelineTask* task) { _queue.emplace(task); }
 
     PipelineTask* try_take(bool is_steal);
 
-    void set_factor_for_normal(double factor_for_normal) { _factor_for_normal = factor_for_normal; }
+    void set_level_factor(double level_factor) { _level_factor = level_factor; }
 
-    double schedule_time_after_normal() { return _schedule_time * _factor_for_normal; }
+    // note:
+    // runtime is the time consumed by the actual execution of the task
+    // vruntime(means virtual runtime) = runtime / _level_factor
+    double get_vruntime() { return double(_runtime) / _level_factor; }
+
+    void inc_runtime(uint64_t delta_time) { _runtime += delta_time; }
+
+    void adjust_runtime(uint64_t vruntime) {
+        this->_runtime = uint64_t(double(vruntime) * _level_factor);
+    }
 
     bool empty() { return _queue.empty(); }
 
 private:
     std::queue<PipelineTask*> _queue;
-    // factor for normalization
-    double _factor_for_normal = 1;
-    // the value cal the queue task time consume, the WorkTaskQueue
-    // use it to find the min queue to take task work
-    std::atomic<uint64_t> _schedule_time = 0;
+    // depends on LEVEL_QUEUE_TIME_FACTOR
+    double _level_factor = 1;
+
+    std::atomic<uint64_t> _runtime = 0;
 };
 
-// Each thread have private MLFQ
-class WorkTaskQueue {
+// A Multilevel Feedback Queue
+class PriorityTaskQueue {
 public:
-    explicit WorkTaskQueue();
+    PriorityTaskQueue();
 
     void close();
-
-    PipelineTask* try_take_unprotected(bool is_steal);
 
     PipelineTask* try_take(bool is_steal);
 
@@ -61,55 +78,63 @@ public:
 
     Status push(PipelineTask* task);
 
-    // Get the each thread task size to do
-    size_t size() { return _total_task_size; }
+    void inc_sub_queue_runtime(int level, uint64_t runtime) {
+        _sub_queues[level].inc_runtime(runtime);
+    }
 
 private:
-    static constexpr auto LEVEL_QUEUE_TIME_FACTOR = 1.5;
-    static constexpr size_t SUB_QUEUE_LEVEL = 5;
-    // 3, 6, 9, 12
-    static constexpr uint32_t BASE_LIMIT = 3;
-    SubWorkTaskQueue _sub_queues[SUB_QUEUE_LEVEL];
-    uint32_t _task_schedule_limit[SUB_QUEUE_LEVEL - 1];
+    PipelineTask* _try_take_unprotected(bool is_steal);
+    static constexpr auto LEVEL_QUEUE_TIME_FACTOR = 2;
+    static constexpr size_t SUB_QUEUE_LEVEL = 6;
+    SubTaskQueue _sub_queues[SUB_QUEUE_LEVEL];
+    // 1s, 3s, 10s, 60s, 300s
+    uint64_t _queue_level_limit[SUB_QUEUE_LEVEL - 1] = {1000000000, 3000000000, 10000000000,
+                                                        60000000000, 300000000000};
     std::mutex _work_size_mutex;
     std::condition_variable _wait_task;
     std::atomic<size_t> _total_task_size = 0;
     bool _closed;
 
-    int _compute_level(PipelineTask* task);
+    // used to adjust vruntime of a queue when it's not empty
+    // protected by lock _work_size_mutex
+    uint64_t _queue_level_min_vruntime = 0;
+
+    int _compute_level(uint64_t real_runtime);
 };
 
 // Need consider NUMA architecture
-class TaskQueue {
+class MultiCoreTaskQueue {
 public:
-    explicit TaskQueue(size_t core_size) : _core_size(core_size), _closed(false) {
-        _async_queue.reset(new WorkTaskQueue[core_size]);
-    }
+    explicit MultiCoreTaskQueue(int core_size);
 
-    ~TaskQueue() = default;
-
-    void close();
-
+#ifndef BE_TEST
+    ~MultiCoreTaskQueue();
     // Get the task by core id.
-    // TODO: To think the logic is useful?
-    PipelineTask* try_take(size_t core_id);
-
-    PipelineTask* steal_take(size_t core_id);
+    PipelineTask* take(int core_id);
+#else
+    virtual ~MultiCoreTaskQueue();
+    virtual PipelineTask* take(int core_id);
+#endif
+    void close();
 
     // TODO combine these methods to `push_back(task, core_id = -1)`
     Status push_back(PipelineTask* task);
 
-    Status push_back(PipelineTask* task, size_t core_id);
+    Status push_back(PipelineTask* task, int core_id);
+
+    void update_statistics(PipelineTask* task, int64_t time_spent);
 
     int cores() const { return _core_size; }
 
 private:
-    std::unique_ptr<WorkTaskQueue[]> _async_queue;
-    size_t _core_size;
-    std::atomic<size_t> _next_core = 0;
+    PipelineTask* _steal_take(int core_id);
+
+    std::vector<PriorityTaskQueue> _prio_task_queues;
+    std::atomic<uint32_t> _next_core = 0;
     std::atomic<bool> _closed;
+
+    int _core_size;
     static constexpr auto WAIT_CORE_TASK_TIMEOUT_MS = 100;
 };
-
-} // namespace pipeline
-} // namespace doris
+#include "common/compile_check_end.h"
+} // namespace doris::pipeline

@@ -9,7 +9,8 @@
 #include <utility> // IWYU pragma: keep
 
 #include "gutil/atomicops.h"
-#include "gutil/macros.h"
+// IWYU pragma: no_include <butil/macros.h>
+#include "gutil/macros.h" // IWYU pragma: keep
 #include "gutil/threading/thread_collision_warner.h"
 
 namespace doris {
@@ -311,7 +312,7 @@ public:
     void reset(T* p = NULL) { *this = p; }
 
 protected:
-    T* ptr_;
+    T* ptr_ = nullptr;
 
 private:
     template <typename U>

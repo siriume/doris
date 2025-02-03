@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include <memory>
 #include <vector>
 
 #include "gutil/ref_counted.h"
@@ -26,17 +25,10 @@
 
 namespace doris {
 
-struct StorePath;
-class Thread;
-
 class Daemon {
 public:
     Daemon() : _stop_background_threads_latch(1) {}
-
-    // Initialises logging, flags etc. Callers that want to override default gflags
-    // variables should do so before calling this method; no logging should be
-    // performed until after this method returns.
-    void init(int argc, char** argv, const std::vector<StorePath>& paths);
+    ~Daemon() = default;
 
     // Start background threads
     void start();
@@ -48,18 +40,16 @@ private:
     void tcmalloc_gc_thread();
     void memory_maintenance_thread();
     void memory_gc_thread();
-    void load_channel_tracker_refresh_thread();
-    void memory_tracker_profile_refresh_thread();
+    void memtable_memory_refresh_thread();
     void calculate_metrics_thread();
-    void block_spill_gc_thread();
+    void je_reset_dirty_decay_thread() const;
+    void cache_adjust_capacity_thread();
+    void cache_prune_stale_thread();
+    void report_runtime_query_statistics_thread();
+    void be_proc_monitor_thread();
+    void calculate_workload_group_metrics_thread();
 
     CountDownLatch _stop_background_threads_latch;
-    scoped_refptr<Thread> _tcmalloc_gc_thread;
-    scoped_refptr<Thread> _memory_maintenance_thread;
-    scoped_refptr<Thread> _memory_gc_thread;
-    scoped_refptr<Thread> _load_channel_tracker_refresh_thread;
-    scoped_refptr<Thread> _memory_tracker_profile_refresh_thread;
-    scoped_refptr<Thread> _calculate_metrics_thread;
-    scoped_refptr<Thread> _block_spill_gc_thread;
+    std::vector<scoped_refptr<Thread>> _threads;
 };
 } // namespace doris

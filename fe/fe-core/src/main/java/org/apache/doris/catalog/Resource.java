@@ -46,7 +46,10 @@ import java.util.stream.Collectors;
 public abstract class Resource implements Writable, GsonPostProcessable {
     private static final Logger LOG = LogManager.getLogger(OdbcCatalogResource.class);
     public static final String REFERENCE_SPLIT = "@";
-    public static final String SPECIFIED_DATABASE_LIST = "specified_database_list";
+    public static final String INCLUDE_DATABASE_LIST = "include_database_list";
+    public static final String EXCLUDE_DATABASE_LIST = "exclude_database_list";
+    public static final String LOWER_CASE_META_NAMES = "lower_case_meta_names";
+    public static final String META_NAMES_MAPPING = "meta_names_mapping";
 
     public enum ResourceType {
         UNKNOWN,
@@ -56,7 +59,8 @@ public abstract class Resource implements Writable, GsonPostProcessable {
         JDBC,
         HDFS,
         HMS,
-        ES;
+        ES,
+        AZURE;
 
         public static ResourceType fromString(String resourceType) {
             for (ResourceType type : ResourceType.values()) {
@@ -108,6 +112,9 @@ public abstract class Resource implements Writable, GsonPostProcessable {
         lock.readLock().unlock();
     }
 
+    // https://programmerr47.medium.com/gson-unsafe-problem-d1ff29d4696f
+    // Resource subclass also MUST define default ctor, otherwise when reloading object from json
+    // some not serialized field (i.e. `lock`) will be `null`.
     public Resource() {
     }
 
@@ -170,6 +177,9 @@ public abstract class Resource implements Writable, GsonPostProcessable {
                 break;
             case S3:
                 resource = new S3Resource(name);
+                break;
+            case AZURE:
+                resource = new AzureResource(name);
                 break;
             case JDBC:
                 resource = new JdbcResource(name);
@@ -295,4 +305,6 @@ public abstract class Resource implements Writable, GsonPostProcessable {
             }
         });
     }
+
+    public void applyDefaultProperties() {}
 }

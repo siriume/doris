@@ -15,12 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <cstddef>
+#include <glog/logging.h>
 
+#include <cstddef>
+#include <memory>
+#include <ostream>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "common/status.h"
+#include "vec/aggregate_functions/aggregate_function.h"
+#include "vec/columns/column.h"
 #include "vec/columns/column_array.h"
+#include "vec/common/assert_cast.h"
+#include "vec/core/block.h"
+#include "vec/core/column_numbers.h"
+#include "vec/core/column_with_type_and_name.h"
+#include "vec/core/types.h"
+#include "vec/data_types/data_type.h"
 #include "vec/data_types/data_type_array.h"
 #include "vec/functions/function.h"
 #include "vec/functions/simple_function_factory.h"
+
+namespace doris {
+class FunctionContext;
+} // namespace doris
 
 namespace doris::vectorized {
 
@@ -48,7 +68,7 @@ public:
     }
 
     Status execute_impl(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
-                        const size_t result, size_t input_rows_count) override {
+                        const uint32_t result, size_t input_rows_count) const override {
         DataTypePtr column_type = block.get_by_position(arguments[0]).type;
         auto nested_type = assert_cast<const DataTypeArray&>(*column_type).get_nested_type();
         auto result_column = ColumnArray::create(nested_type->create_column(),

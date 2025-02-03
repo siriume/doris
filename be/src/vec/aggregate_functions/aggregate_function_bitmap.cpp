@@ -19,25 +19,35 @@
 
 #include "vec/aggregate_functions/aggregate_function_simple_factory.h"
 #include "vec/aggregate_functions/helpers.h"
+#include "vec/data_types/data_type.h"
+#include "vec/data_types/data_type_nullable.h"
 
 namespace doris::vectorized {
+#include "common/compile_check_begin.h"
 
 template <bool nullable, template <bool, typename> class AggregateFunctionTemplate>
-IAggregateFunction* create_with_int_data_type(const DataTypes& argument_type) {
+AggregateFunctionPtr create_with_int_data_type(const DataTypes& argument_type) {
     auto type = remove_nullable(argument_type[0]);
     WhichDataType which(type);
-#define DISPATCH(TYPE)                                                                     \
-    if (which.idx == TypeIndex::TYPE) {                                                    \
-        return new AggregateFunctionTemplate<nullable, ColumnVector<TYPE>>(argument_type); \
+#define DISPATCH(TYPE)                                                                    \
+    if (which.idx == TypeIndex::TYPE) {                                                   \
+        return std::make_shared<AggregateFunctionTemplate<nullable, ColumnVector<TYPE>>>( \
+                argument_type);                                                           \
     }
-    FOR_INTEGER_TYPES(DISPATCH)
+    // Keep consistent with the FE definition; the function does not have an int128 type.
+    DISPATCH(Int8)
+    DISPATCH(Int16)
+    DISPATCH(Int32)
+    DISPATCH(Int64)
 #undef DISPATCH
+    LOG(WARNING) << "with unknowed type, failed in create_with_int_data_type bitmap_union_int"
+                 << " and type is: " << argument_type[0]->get_name();
     return nullptr;
 }
 
-AggregateFunctionPtr create_aggregate_function_bitmap_union_count(const std::string& name,
-                                                                  const DataTypes& argument_types,
-                                                                  const bool result_is_nullable) {
+AggregateFunctionPtr create_aggregate_function_bitmap_union_count(
+        const std::string& name, const DataTypes& argument_types, const bool result_is_nullable,
+        const AggregateFunctionAttr& attr) {
     const bool arg_is_nullable = argument_types[0]->is_nullable();
     if (arg_is_nullable) {
         return std::make_shared<AggregateFunctionBitmapCount<true, ColumnBitmap>>(argument_types);
@@ -48,7 +58,8 @@ AggregateFunctionPtr create_aggregate_function_bitmap_union_count(const std::str
 
 AggregateFunctionPtr create_aggregate_function_bitmap_union_int(const std::string& name,
                                                                 const DataTypes& argument_types,
-                                                                const bool result_is_nullable) {
+                                                                const bool result_is_nullable,
+                                                                const AggregateFunctionAttr& attr) {
     const bool arg_is_nullable = argument_types[0]->is_nullable();
     if (arg_is_nullable) {
         return AggregateFunctionPtr(

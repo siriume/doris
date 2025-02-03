@@ -15,11 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <gtest/gtest.h>
+#include <glog/logging.h>
+#include <gtest/gtest-message.h>
+#include <gtest/gtest-test-part.h>
+#include <stddef.h>
+#include <stdint.h>
 
+#include <memory>
+#include <ostream>
+#include <string>
+
+#include "gtest/gtest_pred_impl.h"
 #include "vec/aggregate_functions/aggregate_function.h"
 #include "vec/aggregate_functions/aggregate_function_simple_factory.h"
+#include "vec/columns/column.h"
+#include "vec/columns/column_string.h"
+#include "vec/columns/column_vector.h"
+#include "vec/columns/columns_number.h"
 #include "vec/common/arena.h"
+#include "vec/common/string_buffer.hpp"
+#include "vec/common/string_ref.h"
+#include "vec/core/types.h"
 #include "vec/data_types/data_type.h"
 #include "vec/data_types/data_type_date.h"
 #include "vec/data_types/data_type_date_time.h"
@@ -104,7 +120,7 @@ public:
                   << "(" << data_types[0]->get_name() << ")";
 
         AggregateFunctionSimpleFactory factory = AggregateFunctionSimpleFactory::instance();
-        auto agg_function = factory.get("histogram", data_types);
+        auto agg_function = factory.get("histogram", data_types, false, -1);
         EXPECT_NE(agg_function, nullptr);
 
         std::unique_ptr<char[]> memory(new char[agg_function->size_of_data()]);
@@ -202,7 +218,7 @@ TEST_F(VAggHistogramTest, test_empty) {
     test_agg_histogram<DataTypeDate>();
     test_agg_histogram<DataTypeDateTime>();
     test_agg_histogram<DataTypeString>();
-    test_agg_histogram<DataTypeDecimal<Decimal128>>();
+    test_agg_histogram<DataTypeDecimal<Decimal128V2>>();
 }
 
 TEST_F(VAggHistogramTest, test_with_data) {
@@ -222,7 +238,7 @@ TEST_F(VAggHistogramTest, test_with_data) {
     test_agg_histogram<DataTypeDateTime>(100, 5);
     test_agg_histogram<DataTypeDateTimeV2>(100, 5);
 
-    test_agg_histogram<DataTypeDecimal<Decimal128>>(100, 5);
+    test_agg_histogram<DataTypeDecimal<Decimal128V2>>(100, 5);
 }
 
 } // namespace doris::vectorized

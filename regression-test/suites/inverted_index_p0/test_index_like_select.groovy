@@ -44,7 +44,7 @@ suite("test_index_like_select", "inverted_index_select"){
             useTime = t
             sleep(delta_time)
         }
-        assertTrue(useTime <= OpTimeout)
+        assertTrue(useTime <= OpTimeout, "wait_for_latest_op_on_table_finish timeout")
     }
 
     sql "DROP TABLE IF EXISTS ${indexTbName1}"
@@ -65,7 +65,7 @@ suite("test_index_like_select", "inverted_index_select"){
                 INDEX ${varchar_colume1}_idx(${varchar_colume1}) USING INVERTED COMMENT '${varchar_colume1} index',
                 INDEX ${int_colume1}_idx(${int_colume1}) USING INVERTED COMMENT '${int_colume1} index',
                 INDEX ${varchar_colume2}_idx(${varchar_colume2}) USING INVERTED PROPERTIES("parser"="none") COMMENT '${varchar_colume2} index',
-                INDEX ${string_colume1}_idx(${string_colume1}) USING INVERTED PROPERTIES("parser"="english") COMMENT '${string_colume1} index',
+                INDEX ${string_colume1}_idx(${string_colume1}) using inverted properties("support_phrase" = "true", "parser" = "english", "lower_case" = "true") COMMENT '${string_colume1} index',
                 INDEX ${char_colume1}_idx(${char_colume1}) USING INVERTED PROPERTIES("parser"="standard") COMMENT '${char_colume1} index',
                 INDEX ${text_colume1}_idx(${text_colume1}) USING INVERTED PROPERTIES("parser"="standard") COMMENT '${text_colume1} index',
                 INDEX ${varchar_colume3}_idx(${varchar_colume3}) USING INVERTED PROPERTIES("parser"="standard") COMMENT ' ${varchar_colume3} index'
@@ -91,36 +91,30 @@ suite("test_index_like_select", "inverted_index_select"){
         // case 1
         if (i > 0) {
             logger.info("it's " + i + " times select, not first select, drop all index before select again")
-            sql """ drop index ${varchar_colume1}_idx on ${indexTbName1} """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ drop index ${varchar_colume2}_idx on ${indexTbName1} """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ drop index ${varchar_colume3}_idx on ${indexTbName1} """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ drop index ${int_colume1}_idx on ${indexTbName1} """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ drop index ${string_colume1}_idx on ${indexTbName1} """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ drop index ${char_colume1}_idx on ${indexTbName1} """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ drop index ${text_colume1}_idx on ${indexTbName1} """
+            sql """
+                ALTER TABLE ${indexTbName1}
+                    drop index ${varchar_colume1}_idx,
+                    drop index ${varchar_colume2}_idx,
+                    drop index ${varchar_colume3}_idx,
+                    drop index ${int_colume1}_idx,
+                    drop index ${string_colume1}_idx,
+                    drop index ${char_colume1}_idx,
+                    drop index ${text_colume1}_idx;
+            """
             wait_for_latest_op_on_table_finish(indexTbName1, timeout)
 
             // readd index
             logger.info("it's " + i + " times select, readd all index before select again")
-            sql """ create index ${varchar_colume1}_idx on ${indexTbName1}(`${varchar_colume1}`) USING INVERTED COMMENT '${varchar_colume1} index'"""
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ create index ${varchar_colume2}_idx on ${indexTbName1}(`${varchar_colume2}`) USING INVERTED PROPERTIES("parser"="none") COMMENT '${varchar_colume2} index'"""
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ create index ${varchar_colume3}_idx on ${indexTbName1}(`${varchar_colume3}`) USING INVERTED PROPERTIES("parser"="standard") COMMENT ' ${varchar_colume3} index'"""
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ create index ${int_colume1}_idx on ${indexTbName1}(`${int_colume1}`) USING INVERTED COMMENT '${int_colume1} index' """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ create index ${string_colume1}_idx on ${indexTbName1}(`${string_colume1}`) USING INVERTED PROPERTIES("parser"="english") COMMENT '${string_colume1} index' """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ create index ${char_colume1}_idx on ${indexTbName1}(`${char_colume1}`) USING INVERTED PROPERTIES("parser"="standard") COMMENT '${char_colume1} index' """
-            wait_for_latest_op_on_table_finish(indexTbName1, timeout)
-            sql """ create index ${text_colume1}_idx on ${indexTbName1}(`${text_colume1}`) USING INVERTED PROPERTIES("parser"="standard") COMMENT '${text_colume1} index' """
+            sql """
+                ALTER TABLE ${indexTbName1}
+                    add index ${varchar_colume1}_idx(`${varchar_colume1}`) USING INVERTED COMMENT '${varchar_colume1} index',
+                    add index ${varchar_colume2}_idx(`${varchar_colume2}`) USING INVERTED PROPERTIES("parser"="none") COMMENT '${varchar_colume2} index',
+                    add index ${varchar_colume3}_idx(`${varchar_colume3}`) USING INVERTED PROPERTIES("parser"="standard") COMMENT ' ${varchar_colume3} index',
+                    add index ${int_colume1}_idx(`${int_colume1}`) USING INVERTED COMMENT '${int_colume1} index',
+                    add index ${string_colume1}_idx(`${string_colume1}`) using inverted properties("support_phrase" = "true", "parser" = "english", "lower_case" = "true") COMMENT '${string_colume1} index',
+                    add index ${char_colume1}_idx(`${char_colume1}`) USING INVERTED PROPERTIES("parser"="standard") COMMENT '${char_colume1} index',
+                    add index ${text_colume1}_idx(`${text_colume1}`) USING INVERTED PROPERTIES("parser"="standard") COMMENT '${text_colume1} index';
+            """
             wait_for_latest_op_on_table_finish(indexTbName1, timeout)
         }
 
@@ -212,5 +206,61 @@ suite("test_index_like_select", "inverted_index_select"){
                 order by name
             """
         qt_sql """select 22222222"""
+
+        // create DUP KEY table with bitmap index
+        def indexTbName2 = "bitmap_index_like"
+        sql "DROP TABLE IF EXISTS ${indexTbName2}"
+        sql """
+                CREATE TABLE IF NOT EXISTS ${indexTbName2} (
+                    ${varchar_colume1} varchar(50),
+                    ${varchar_colume2} varchar(30) NOT NULL,
+                    ${varchar_colume3} varchar(50),
+                    ${varchar_colume4} varchar(50),
+                    ${int_colume1} int NOT NULL,
+                    INDEX ${varchar_colume3}_idx(${varchar_colume3}) USING BITMAP COMMENT ' ${varchar_colume3} index'
+                )
+                DUPLICATE KEY(`${varchar_colume1}`, `${varchar_colume2}`, `${varchar_colume3}`, `${varchar_colume4}`)
+                DISTRIBUTED BY HASH(`${varchar_colume1}`) BUCKETS 10
+                properties("replication_num" = "1");
+        """
+        sql """ insert into ${indexTbName2} VALUES
+                ("zhang san", "grade 5", "zhang yi", "chen san", 10),
+                ("zhang san yi", "grade 5", "zhang yi", "chen san", 11),
+                ("li si", "grade 4", "li er", "wan jiu", 9),
+                ("san zhang", "grade 5", "", "", 10),
+                ("li sisi", "grade 6", "li ba", "li liuliu", 11)
+            """
+        sql """ set enable_function_pushdown=true; """
+        qt_sql """
+            select * from ${indexTbName2} where ${varchar_colume3} like "zhang%" order by ${varchar_colume1}
+            """
+
+        // create AGG KEY table with bitmap index
+        def indexTbName3 = "bitmap_index_like2"
+        sql "DROP TABLE IF EXISTS ${indexTbName3}"
+        sql """
+                CREATE TABLE IF NOT EXISTS ${indexTbName3} (
+                    ${varchar_colume1} varchar(50),
+                    ${varchar_colume2} varchar(30) NOT NULL,
+                    ${varchar_colume3} varchar(50),
+                    ${varchar_colume4} varchar(50),
+                    ${int_colume1} int SUM NULL DEFAULT "0",
+                    INDEX ${varchar_colume3}_idx(${varchar_colume3}) USING BITMAP COMMENT ' ${varchar_colume3} index'
+                )
+                AGGREGATE KEY(`${varchar_colume1}`, `${varchar_colume2}`, `${varchar_colume3}`, `${varchar_colume4}`)
+                DISTRIBUTED BY HASH(`${varchar_colume1}`) BUCKETS 10
+                properties("replication_num" = "1");
+        """
+        sql """ insert into ${indexTbName3} VALUES
+                ("zhang san", "grade 5", "zhang yi", "chen san", 10),
+                ("zhang san yi", "grade 5", "zhang yi", "chen san", 11),
+                ("li si", "grade 4", "li er", "wan jiu", 9),
+                ("san zhang", "grade 5", "", "", 10),
+                ("li sisi", "grade 6", "li ba", "li liuliu", 11)
+            """
+        sql """ set enable_function_pushdown=true; """
+        qt_sql """
+            select * from ${indexTbName3} where ${varchar_colume3} like "zhang%" order by ${varchar_colume1}
+            """
     }
 }

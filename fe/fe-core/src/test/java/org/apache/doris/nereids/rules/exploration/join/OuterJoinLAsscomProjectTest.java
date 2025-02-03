@@ -18,7 +18,7 @@
 package org.apache.doris.nereids.rules.exploration.join;
 
 import org.apache.doris.common.Pair;
-import org.apache.doris.nereids.rules.rewrite.logical.PushdownAliasThroughJoin;
+import org.apache.doris.nereids.rules.rewrite.PushDownAliasThroughJoin;
 import org.apache.doris.nereids.trees.expressions.EqualTo;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.GreaterThan;
@@ -49,6 +49,7 @@ class OuterJoinLAsscomProjectTest implements MemoPatternMatchSupported {
                 .join(scan2, JoinType.LEFT_OUTER_JOIN, Pair.of(0, 0))
                 .project(ImmutableList.of(0, 1, 2))
                 .join(scan3, JoinType.LEFT_OUTER_JOIN, Pair.of(1, 1))
+                .projectAll()
                 .build();
 
         PlanChecker.from(MemoTestUtils.createConnectContext(), plan)
@@ -56,15 +57,17 @@ class OuterJoinLAsscomProjectTest implements MemoPatternMatchSupported {
                 .applyExploration(OuterJoinLAsscomProject.INSTANCE.build())
                 .printlnExploration()
                 .matchesExploration(
+                    logicalProject(
                         logicalJoin(
-                                logicalJoin(
-                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1")),
-                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
-                                ),
-                                logicalProject(
-                                        logicalOlapScan().when(scan -> scan.getTable().getName().equals("t2"))
-                                ).when(project -> project.getProjects().size() == 1)
+                            logicalProject(logicalJoin(
+                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1")),
+                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
+                            )),
+                            logicalProject(
+                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t2"))
+                            ).when(project -> project.getProjects().size() == 1)
                         )
+                    )
                 );
     }
 
@@ -74,24 +77,27 @@ class OuterJoinLAsscomProjectTest implements MemoPatternMatchSupported {
                 .join(scan2, JoinType.LEFT_OUTER_JOIN, Pair.of(0, 0))
                 .alias(ImmutableList.of(0, 2), ImmutableList.of("t1.id", "t2.id"))
                 .join(scan3, JoinType.LEFT_OUTER_JOIN, Pair.of(0, 0))
+                .projectAll()
                 .build();
 
         PlanChecker.from(MemoTestUtils.createConnectContext(), plan)
-                .applyTopDown(new PushdownAliasThroughJoin())
+                .applyTopDown(new PushDownAliasThroughJoin())
                 .printlnTree()
                 .applyExploration(OuterJoinLAsscomProject.INSTANCE.build())
                 .printlnExploration()
                 .matchesExploration(
-                    logicalJoin(
-                        logicalProject(
-                            logicalJoin(
-                                logicalProject(logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1"))),
-                                logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
-                            )
-                        ).when(project -> project.getProjects().size() == 3), // t1.id Add t3.id, t3.name
-                        logicalProject(
-                            logicalProject(logicalOlapScan().when(scan -> scan.getTable().getName().equals("t2")))
-                        ).when(project -> project.getProjects().size() == 1)
+                    logicalProject(
+                        logicalJoin(
+                            logicalProject(
+                                logicalJoin(
+                                    logicalProject(logicalOlapScan().when(scan -> scan.getTable().getName().equals("t1"))),
+                                    logicalOlapScan().when(scan -> scan.getTable().getName().equals("t3"))
+                                )
+                            ).when(project -> project.getProjects().size() == 3), // t1.id Add t3.id, t3.name
+                            logicalProject(
+                                logicalProject(logicalOlapScan().when(scan -> scan.getTable().getName().equals("t2")))
+                            ).when(project -> project.getProjects().size() == 1)
+                        )
                     )
                 );
     }
